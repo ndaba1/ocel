@@ -50,13 +50,12 @@ impl<'a> NodeClient<'a> {
 
         let discovery_script = format!(
             r#"
-const __promises = [];
-globalThis.__ocelRegister = (p) => __promises.push(p);
-
 {}
 
+const __promises: Promise<Response>[] = globalThis.__ocelRegister;
+console.log('Waiting for discovery to complete...', __promises.length, 'resources found.');
 await Promise.all(__promises);
-await fetch("${{process.env.OCEL_SERVER}}/commit", {{ method: "POST" }});
+await fetch(`${{process.env.OCEL_SERVER}}/commit`, {{ method: "POST" }});
         "#,
             import_statements,
         )
@@ -73,7 +72,10 @@ await fetch("${{process.env.OCEL_SERVER}}/commit", {{ method: "POST" }});
 
         let mut envs = HashMap::new();
 
-        envs.insert("OCEL_SERVER".to_string(), "TODO".to_string());
+        envs.insert(
+            "OCEL_SERVER".to_string(),
+            "http://localhost:8080".to_string(),
+        );
         envs.insert("OCEL_PHASE".to_string(), "discovery".to_string());
 
         // sdks may depend on some outputs

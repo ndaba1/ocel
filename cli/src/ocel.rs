@@ -15,10 +15,8 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::{Value, json};
 
 use crate::{
-    client::{self, NodeClient},
-    engine::OcelEngine,
+    client::NodeClient,
     project::{self, ProjectType},
-    server::OcelServer,
 };
 
 #[derive(Debug, Clone)]
@@ -260,34 +258,7 @@ impl Ocel {
         Ok(flattened_outputs)
     }
 
-    pub fn run_dev_mode(&self) -> Result<()> {
-        // TODO: leader and infra server etc
-        let ocel = self.clone();
-
-        // infra server
-        let server_handle = thread::spawn(move || -> Result<()> {
-            let rt = tokio::runtime::Runtime::new().context("Failed to create Tokio runtime")?;
-
-            rt.block_on(async {
-                let engine = OcelEngine::new(Arc::new(ocel));
-                let server = OcelServer::new(Arc::new(engine));
-
-                server.start().await;
-            });
-
-            Ok(())
-        });
-
-        // language client
-        let client = self.get_dev_client()?;
-        client.start_dev()?;
-
-        server_handle.join().expect("Ocel Server thread panicked")?;
-
-        Ok(())
-    }
-
-    fn get_dev_client(&self) -> Result<Box<dyn DevClient + '_>> {
+    pub fn get_client(&self) -> Result<Box<dyn DevClient + '_>> {
         let project = self.current_project.as_ref().unwrap();
         match project.project_type {
             ProjectType::Typescript => {

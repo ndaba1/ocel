@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::engine::{self, Component, Linkable, OcelEngine};
+use crate::engine::{Component, Linkable, OcelEngine};
 
 pub struct BucketComponent {
     name: String,
