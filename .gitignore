@@ -195,3 +195,4 @@ go.work.sum
 
 # custom
 .ocel
+packages/native-lib/
