@@ -3,6 +3,7 @@ use std::{
     fs::{self, File},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::Arc,
     thread,
     time::Duration,
 };
@@ -15,7 +16,9 @@ use serde_json::{Value, json};
 
 use crate::{
     client::{self, NodeClient},
+    engine::OcelEngine,
     project::{self, ProjectType},
+    server::OcelServer,
 };
 
 #[derive(Debug, Clone)]
@@ -30,7 +33,7 @@ pub struct Ocel {
 }
 
 pub trait DevClient {
-    fn dev(&self) -> Result<()>;
+    fn start_dev(&self) -> Result<()>;
 }
 
 impl Ocel {
@@ -249,13 +252,7 @@ impl Ocel {
             for (key, metadata_obj) in map {
                 // We only care about the inner "value" field
                 if let Some(inner_value) = metadata_obj.get("value") {
-                    flattened_outputs.insert(
-                        key,
-                        inner_value
-                            .as_str()
-                            .expect("Expected a string value")
-                            .to_string(),
-                    );
+                    flattened_outputs.insert(key, inner_value.to_string());
                 }
             }
         }
@@ -265,8 +262,27 @@ impl Ocel {
 
     pub fn run_dev_mode(&self) -> Result<()> {
         // TODO: leader and infra server etc
+        let ocel = self.clone();
+
+        // infra server
+        let server_handle = thread::spawn(move || -> Result<()> {
+            let rt = tokio::runtime::Runtime::new().context("Failed to create Tokio runtime")?;
+
+            rt.block_on(async {
+                let engine = OcelEngine::new(Arc::new(ocel));
+                let server = OcelServer::new(Arc::new(engine));
+
+                server.start().await;
+            });
+
+            Ok(())
+        });
+
+        // language client
         let client = self.get_dev_client()?;
-        client.dev()?;
+        client.start_dev()?;
+
+        server_handle.join().expect("Ocel Server thread panicked")?;
 
         Ok(())
     }

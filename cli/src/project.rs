@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::utils;
 
 #[derive(Debug, Copy, Clone, Selectable, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProjectType {
     Typescript,
     Python,

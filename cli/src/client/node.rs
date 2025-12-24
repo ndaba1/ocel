@@ -12,7 +12,7 @@ pub struct NodeClient<'a> {
 }
 
 impl<'a> DevClient for NodeClient<'a> {
-    fn dev(&self) -> Result<()> {
+    fn start_dev(&self) -> Result<()> {
         println!("Starting Node.js development server...");
 
         // initial discovery run
@@ -49,17 +49,20 @@ impl<'a> NodeClient<'a> {
             .join("\n");
 
         let discovery_script = format!(
-            r#"{}
+            r#"
+const __promises = [];
+globalThis.__ocelRegister = (p) => __promises.push(p);
 
-Bun.serve({{
-    port: 0,
-    fetch(request) {{
-        return new Response("Ocel Node.js Discovery Server is running!");
-    }},
-}});
+{}
+
+await Promise.all(__promises);
+await fetch("${{process.env.OCEL_SERVER}}/commit", {{ method: "POST" }});
         "#,
             import_statements,
-        );
+        )
+        .trim_start()
+        .trim_end()
+        .to_string();
 
         let discovery_path = project
             .project_root

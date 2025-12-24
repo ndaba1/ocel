@@ -4,8 +4,11 @@ use clap::{Parser, Subcommand};
 mod bun;
 mod client;
 mod cmd;
+mod components;
+mod engine;
 mod ocel;
 mod project;
+mod server;
 mod tofu;
 mod utils;
 
