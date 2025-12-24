@@ -1,0 +1,21 @@
+[package]
+name = "ocel-cli"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.53", features = ["derive"] }
+colored = "3.0.0"
+directories = "6.0.0"
+flate2 = "1.1.5"
+globwalk = "0.9.1"
+indicatif = "0.18.3"
+inquire = "0.9.1"
+inquire-derive = "0.9.1"
+reqwest = { version = "0.12.28", features = ["blocking"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tar = "0.4.44"
+whoami = "1.6.1"
+zip = "7.0.0"
