@@ -1,0 +1,84 @@
+{
+  "name": "ocel",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The power of AWS with the DX of Vercel",
+  "bin": {
+    "ocel": "./bin/run.js"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "README.md"
+  ],
+  "exports": {
+    "./blob": {
+      "import": "./dist/blob/index.js",
+      "types": "./dist/blob/index.d.ts"
+    },
+    "./blob/*": {
+      "import": "./dist/blob/integrations/*.js",
+      "types": "./dist/blob/integrations/*.d.ts"
+    },
+    "./lambda": {
+      "import": "./dist/lambda/index.js",
+      "types": "./dist/lambda/index.d.ts"
+    },
+    "./lambda/*": {
+      "import": "./dist/lambda/integrations/*.js",
+      "types": "./dist/lambda/integrations/*.d.ts"
+    },
+    "./workflow": {
+      "import": "./dist/workflow/index.js",
+      "types": "./dist/workflow/index.d.ts"
+    },
+    "./postgres": {
+      "import": "./dist/postgres/index.js",
+      "types": "./dist/postgres/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@10.18.3",
+  "optionalDependencies": {
+    "ocel-linux-x64": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "hono": "~4.11.1",
+    "@types/express": "~5.0.0",
+    "express": "~5.0.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.958.0",
+    "@aws-sdk/client-lambda": "^3.958.0",
+    "@aws-sdk/client-s3": "^3.958.0",
+    "@aws-sdk/client-xray": "^3.958.0",
+    "@aws-sdk/s3-request-presigner": "^3.958.0",
+    "@aws/durable-execution-sdk-js": "^1.0.1",
+    "@opentelemetry/api": "^1.9.0",
+    "@sindresorhus/slugify": "^3.0.0",
+    "electrodb": "^3.5.0",
+    "nanoid": "^5.1.6",
+    "serverless-http": "^4.0.0",
+    "zod": "^4.2.1"
+  },
+  "peerDependencies": {
+    "hono": ">=4.11.1",
+    "@types/express": ">=5.0.0",
+    "express": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    },
+    "@types/express": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    }
+  }
+}
