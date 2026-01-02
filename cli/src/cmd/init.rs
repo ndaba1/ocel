@@ -5,14 +5,16 @@ use colored::Colorize;
 use inquire::Text;
 
 use crate::{
+    engine::EnvTarget,
     ocel::Ocel,
     project::{OcelProject, OcelProjectJson, ProjectType},
 };
 
-pub fn init() -> Result<()> {
+pub async fn init() -> Result<()> {
     println!("Initializing a new Ocel project...");
 
-    let mut ocel = Ocel::init()?;
+    // doesn't matter if we pass None here as we are not loading an existing project
+    let ocel = Ocel::init(None, EnvTarget::Dev).await?;
 
     let project_name = Text::new("What should we name your project ?")
         .with_default("ocel-example")
@@ -50,8 +52,7 @@ pub fn init() -> Result<()> {
         current_env_dir: cwd.join(".ocel").join("tofu").join(&current_env),
     };
 
-    ocel.set_current_project(&project);
-    ocel.init_providers()?;
+    ocel.init_providers().await?;
 
     let cfg_path = cwd.join("ocel.json");
     let cfg_file = File::create(&cfg_path)

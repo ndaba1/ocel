@@ -2,35 +2,108 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::engine::{Component, Linkable, OcelEngine};
+use crate::{
+    engine::{Component, EnvTarget, Linkable, OcelEngine, ResourceType},
+    ocel::Ocel,
+    utils::get_nanoid,
+};
 
 pub struct BucketComponent {
-    name: String,
+    id: String,
     config: BucketConfig,
 }
 
 #[derive(serde::Deserialize)]
 struct BucketConfig {
-    versioning: bool,
+    versioning: Option<bool>,
 }
 
 impl BucketComponent {
-    pub fn new(name: String, config: Value) -> Self {
+    pub fn new(id: String, config: Value) -> Self {
         let config = serde_json::from_value(config).expect("Invalid bucket config");
 
-        BucketComponent { name, config }
+        BucketComponent { id, config }
+    }
+
+    fn generate_bucket_name(&self, ocel: &Ocel) -> String {
+        let project = ocel
+            .current_project
+            .clone()
+            .expect("No current project set");
+        let env = project.current_env_name;
+
+        format!(
+            "ocel-{}-{}-{}-{}",
+            project.name,
+            env,
+            self.id,
+            get_nanoid(6)
+        )
     }
 }
 
 impl Component for BucketComponent {
-    fn to_terraform(&self, engine: &OcelEngine) -> serde_json::Value {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn resource_type(&self) -> ResourceType {
+        ResourceType::Bucket
+    }
+
+    fn to_terraform(
+        &self,
+        engine: &OcelEngine,
+        outputs: HashMap<String, String>,
+    ) -> serde_json::Value {
+        let ocel = &engine.get_ocel();
+        let mut bucket_name = self.generate_bucket_name(ocel);
+
+        let bucket_name_output_key = format!("RESOURCE_{}_BUCKET_NAME", self.id);
+        let bucket_cors_key = format!("{}_cors", self.id);
+        let bucket_versioning_key = format!("{}_versioning", self.id);
+
+        if let Some(existing_name) = outputs.get(&bucket_name_output_key) {
+            bucket_name = existing_name.to_string();
+        }
+
+        let protected = matches!(ocel.env_target, EnvTarget::Prod);
+        let versioning = self.config.versioning.unwrap_or(false);
+
+        // TODO: refine cors origins ?
+        // TODO: in prod target, deploy lambda subscriber for onUploadComplete notifications
         serde_json::json!({
             "resource": {
                 "aws_s3_bucket": {
-                    &self.name: {
-                        "bucket": &self.name,
-                        "force_destroy": true
+                    &self.id: {
+                        "bucket": bucket_name.to_lowercase(),
+                        "force_destroy": !protected,
                     }
+                },
+                "aws_s3_bucket_cors_configuration": {
+                    &bucket_cors_key: {
+                        "bucket": format!("${{aws_s3_bucket.{}.id}}", &self.id),
+                        "cors_rule": [{
+                            "allowed_headers": ["*"],
+                            "allowed_methods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+                            "allowed_origins": ["*"],
+                            "expose_headers": ["ETag"],
+                            "max_age_seconds": 3000
+                        }]
+                    }
+                },
+                "aws_s3_bucket_versioning": {
+                    &bucket_versioning_key: {
+                        "bucket": format!("${{aws_s3_bucket.{}.id}}", &self.id),
+                        "versioning_configuration": {
+                            "status": if versioning { "Enabled" } else { "Suspended" }
+                        }
+                    }
+                }
+            },
+            "output": {
+                bucket_name_output_key: {
+                    "value": format!("${{aws_s3_bucket.{}.id}}", &self.id)
                 }
             }
         })
@@ -42,7 +115,7 @@ impl Linkable for BucketComponent {
         let mut vars = HashMap::new();
         vars.insert(
             "BUCKET_NAME".to_string(),
-            format!("${{aws_s3_bucket.{}.id}}", self.name),
+            format!("${{aws_s3_bucket.{}.id}}", self.id),
         );
         vars
     }
@@ -55,7 +128,7 @@ impl Linkable for BucketComponent {
                 "s3:PutObject",
                 "s3:DeleteObject"
             ],
-            "Resource": format!("arn:aws:s3:::{}/*", self.name)
+            "Resource": format!("${{aws_s3_bucket.{}.arn}}", self.id)
         })]
     }
 }

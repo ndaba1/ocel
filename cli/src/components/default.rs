@@ -11,8 +11,8 @@ pub fn asset_bucket_ref() -> String {
 }
 
 /// Returns default components to be included in every Ocel project
-pub fn get_default_components(ocel: &Ocel) -> Result<Value> {
-    let outputs = ocel.get_tofu_outputs()?;
+pub async fn get_default_components(ocel: &Ocel) -> Result<Value> {
+    let outputs = ocel.get_tofu_outputs().await?;
     let project = ocel.current_project.as_ref().unwrap();
     let current_env = project.current_env_name.clone();
 
@@ -29,7 +29,7 @@ pub fn get_default_components(ocel: &Ocel) -> Result<Value> {
         .unwrap_or(&default_asset_bucket_id);
 
     let asset_bucket = json!({
-        "bucket": asset_bucket_id,
+        "bucket": asset_bucket_id.to_string(),
         "force_destroy": true
     });
 

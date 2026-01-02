@@ -1,22 +1,28 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
+    io::Write,
     path::PathBuf,
-    process::{Command, Stdio},
-    sync::Arc,
+    process::Stdio,
     thread,
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
+use async_trait::async_trait;
+use aws_config::{BehaviorVersion, SdkConfig, meta::region::RegionProviderChain};
 use colored::Colorize;
 use directories::ProjectDirs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::{Value, json};
+use tokio::process::Command;
+use tracing::debug;
 
 use crate::{
     client::NodeClient,
-    project::{self, ProjectType},
+    cmd::{StackKind, check_stacks},
+    engine::EnvTarget,
+    project::{self, OcelProject, ProjectType},
 };
 
 #[derive(Debug, Clone)]
@@ -26,16 +32,17 @@ pub struct Ocel {
     pub cache_dir: PathBuf,
     pub tofu_bin_path: PathBuf,
     pub bun_bin_path: PathBuf,
-
+    pub env_target: EnvTarget,
     pub current_project: Option<project::OcelProject>,
 }
 
-pub trait DevClient {
-    fn start_dev(&self) -> Result<()>;
+#[async_trait]
+pub trait DiscoveryClient {
+    async fn discover(&self, server_addr: &str) -> Result<()>;
 }
 
 impl Ocel {
-    pub fn new() -> Self {
+    pub async fn new(project: Option<OcelProject>, env_target: EnvTarget) -> Self {
         let project_dirs = ProjectDirs::from("com", "ocel", "ocel-cli")
             .expect("Could not determine project directories");
         let config_dir = project_dirs.config_dir();
@@ -67,20 +74,21 @@ impl Ocel {
             cache_dir: cache_dir.to_path_buf(),
             tofu_bin_path,
             bun_bin_path,
-            current_project: None,
+            env_target,
+            current_project: project,
         }
     }
 
-    pub fn init() -> Result<Self> {
-        let config = Ocel::new();
+    pub async fn init(project: Option<OcelProject>, env_target: EnvTarget) -> Result<Self> {
+        let ocel = Ocel::new(project, env_target).await;
         let m = MultiProgress::new();
 
         let style = ProgressStyle::default_bar()
             .template("{msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}")?
             .progress_chars("#>-");
 
-        let tofu_handle = if !config.tofu_bin_path.exists() {
-            let cfg = config.clone();
+        let tofu_handle = if !ocel.tofu_bin_path.exists() {
+            let cfg = ocel.clone();
             let pb_tofu = m.add(ProgressBar::new(0));
             pb_tofu.set_style(style.clone());
             pb_tofu.set_message("Installing OpenTofu...");
@@ -94,8 +102,8 @@ impl Ocel {
             None
         };
 
-        let bun_handle = if !config.bun_bin_path.exists() {
-            let cfg = config.clone();
+        let bun_handle = if !ocel.bun_bin_path.exists() {
+            let cfg = ocel.clone();
             let pb_bun = m.add(ProgressBar::new(0));
             pb_bun.set_style(style.clone());
             pb_bun.set_message("Installing Bun...");
@@ -120,16 +128,47 @@ impl Ocel {
         // cleanup progress bars
         m.clear()?;
 
-        Ok(config)
+        Ok(ocel)
     }
 }
 
 impl Ocel {
-    pub fn set_current_project(&mut self, project: &project::OcelProject) {
-        self.current_project = Some(project.clone());
+    pub fn get_tf_file_path(&self) -> PathBuf {
+        let project = self.current_project.as_ref().unwrap();
+        project.current_env_dir.join("main.tf.json")
     }
 
-    pub fn init_providers(&self) -> Result<()> {
+    pub async fn write_state(&self, state: Value) -> Result<()> {
+        let project = self.current_project.as_ref().unwrap();
+        let cwd = &project.current_env_dir;
+
+        let existing_state = if cwd.join("main.tf.json").exists() {
+            let content = tokio::fs::read_to_string(cwd.join("main.tf.json"))
+                .await
+                .unwrap_or_default();
+            serde_json::from_str(&content).unwrap_or(json!({}))
+        } else {
+            json!({})
+        };
+
+        if existing_state == state {
+            debug!("No changes detected. Skipping flush.");
+            return Ok(());
+        }
+
+        let mut temp_file = tempfile::NamedTempFile::new_in(cwd)?;
+        let json_bytes = serde_json::to_vec_pretty(&state)?;
+        temp_file.write_all(&json_bytes)?;
+
+        let output_path = cwd.join("main.tf.json");
+        temp_file.persist(&output_path)?;
+
+        debug!("Atomically wrote state to {:?}", output_path);
+
+        Ok(())
+    }
+
+    pub async fn init_providers(&self) -> Result<()> {
         let provider_config = json!({
             "terraform": {
                 "required_providers": {
@@ -162,12 +201,12 @@ impl Ocel {
         serde_json::to_writer_pretty(provider_config_file, &provider_config)
             .with_context(|| format!("Failed to write config to {:?}", provider_config_path))?;
 
-        self.run_tofu(&["init", "-input=false"], None)?;
+        self.run_tofu(&["init", "-input=false"], None).await?;
 
         Ok(())
     }
 
-    pub fn run_tofu(
+    pub async fn run_tofu(
         &self,
         args: &[&str],
         env_vars: Option<&HashMap<String, String>>,
@@ -210,7 +249,7 @@ impl Ocel {
             cmd.envs(vars);
         }
 
-        let status = cmd.status().context("Failed to execute Tofu")?;
+        let status = cmd.status().await.context("Failed to execute Tofu")?;
 
         if status.success() {
             pb.finish_with_message(format!("{} Tofu command completed", "✔".green()));
@@ -221,7 +260,7 @@ impl Ocel {
         }
     }
 
-    pub fn get_tofu_outputs(&self) -> Result<HashMap<String, String>> {
+    pub async fn get_tofu_outputs(&self) -> Result<HashMap<String, String>> {
         let project = self.current_project.as_ref().unwrap();
         let cwd = &project.current_env_dir;
 
@@ -229,6 +268,7 @@ impl Ocel {
             .args(&["output", "-json"])
             .current_dir(cwd)
             .output()
+            .await
             .context("Failed to execute Tofu output command")?;
 
         if !output.status.success() {
@@ -250,7 +290,12 @@ impl Ocel {
             for (key, metadata_obj) in map {
                 // We only care about the inner "value" field
                 if let Some(inner_value) = metadata_obj.get("value") {
-                    flattened_outputs.insert(key, inner_value.to_string());
+                    let clean_value = match inner_value {
+                        serde_json::Value::String(s) => s.clone(),
+                        _ => inner_value.to_string(),
+                    };
+
+                    flattened_outputs.insert(key, clean_value);
                 }
             }
         }
@@ -258,7 +303,16 @@ impl Ocel {
         Ok(flattened_outputs)
     }
 
-    pub fn get_client(&self) -> Result<Box<dyn DevClient + '_>> {
+    pub async fn get_aws_config(&self) -> SdkConfig {
+        let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
+        let config = aws_config::defaults(BehaviorVersion::latest())
+            .region(region_provider)
+            .load()
+            .await;
+        config
+    }
+
+    pub fn get_client(&self) -> Result<Box<dyn DiscoveryClient + '_>> {
         let project = self.current_project.as_ref().unwrap();
         match project.project_type {
             ProjectType::Typescript => {

@@ -1,23 +1,24 @@
-use std::collections::HashMap;
-use std::fs;
-use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Instant;
 
 use anyhow::Result;
-use axum::{Router, routing::post};
 use clap::{Parser, Subcommand};
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use tracing_subscriber::fmt::time::FormatTime;
 
-use crate::rpc::{flush_handler, register_handler};
-use crate::{engine::OcelEngine, ocel::Ocel, project::OcelProject};
+use crate::coordinator::CoordinatorMsg;
+use colored::Colorize;
 
 mod bun;
 mod client;
 mod cmd;
 mod components;
+mod coordinator;
 mod engine;
+mod follower;
+mod lock;
 mod ocel;
 mod project;
-mod rpc;
+mod server;
 mod tofu;
 mod utils;
 
@@ -33,77 +34,75 @@ enum Commands {
     /// Create a new Ocel project
     Init,
     /// Run your project in development mode
-    Dev,
+    Dev(cmd::DevOpts),
+    /// Deploy your Ocel project
+    Deploy,
+    /// Bootstrap your Ocel project infrastructure
+    Bootstrap(cmd::BootstrapOpts),
 }
 
+struct DeltaTimer {
+    // Stores the time of the previous log
+    last_time: Mutex<Instant>,
+}
+
+impl DeltaTimer {
+    fn new() -> Self {
+        Self {
+            last_time: Mutex::new(Instant::now()),
+        }
+    }
+}
+
+impl FormatTime for DeltaTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        let mut last = self.last_time.lock().unwrap();
+        let now = Instant::now();
+        let delta = now.duration_since(*last);
+        *last = now;
+
+        let millis = delta.as_millis();
+
+        // Color logic: Green/Dim for fast, Red for slow
+        let output = if millis < 200 {
+            format!("+{:>3}ms", millis).green()
+        } else if millis < 1000 {
+            format!("+{:>3}ms", millis).yellow()
+        } else {
+            // Show seconds if it's really slow
+            format!("+{:>3.1}s ", delta.as_secs_f64()).red().bold()
+        };
+
+        write!(w, "{}", output)
+    }
+}
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_timer(DeltaTimer::new())
+        .init();
+
     let args = Args::parse();
 
     match args.command {
         Commands::Init => {
-            cmd::init()?;
+            cmd::init().await?;
         }
-        Commands::Dev => {
-            println!("Running ocel in development mode...");
+        Commands::Dev(opts) => {
+            cmd::dev(opts).await?;
+        }
+        Commands::Bootstrap(opts) => {
+            cmd::bootstrap(opts).await?;
+        }
 
-            // TODO: allow passing custom env name
-            let mut ocel = Ocel::init()?;
-            let current_env = whoami::username();
-            let project = OcelProject::get_current_project(current_env)?;
-
-            ocel.set_current_project(&project);
-
-            let ocel_arc = Arc::new(ocel);
-            let engine = Arc::new(tokio::sync::Mutex::new(OcelEngine::new(ocel_arc.clone())));
-
-            let app = Router::new()
-                .route("/commit", post(flush_handler))
-                .route("/register", post(register_handler))
-                .with_state(engine);
-
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
-                .await
-                .expect("Failed to bind to address");
-
-            tokio::spawn(async move {
-                axum::serve(listener, app).await.unwrap();
-            });
-
-            let work_dir = ocel_arc
-                .current_project
-                .as_ref()
-                .unwrap()
-                .current_env_dir
-                .clone();
-
-            let tf_file = work_dir.join("main.tf.json");
-            if !tf_file.exists() {
-                fs::write(&tf_file, "{}")?;
-            }
-
-            let ocel = ocel_arc.clone();
-            tokio::spawn(async move {
-                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-                let mut watcher = RecommendedWatcher::new(
-                    move |res| {
-                        let _ = tx.blocking_send(res);
-                    },
-                    Config::default(),
-                )
-                .unwrap();
-                watcher
-                    .watch(&tf_file, RecursiveMode::NonRecursive)
-                    .unwrap();
-
-                while let Some(_) = rx.recv().await {
-                    ocel.run_tofu(&["apply", "-auto-approve"], None)
-                        .expect("Failed to run tofu apply");
-                }
-            });
-
-            let client = ocel_arc.get_client()?;
-            client.start_dev()?
+        /*
+         * deploy is basically dev without the file watcher
+         * also, we need a way to tell the engine we are in "production" mode, so it can behave accordingly
+         * however, deploy still need to deploy "apps"/"services" defined in the ocel project
+         */
+        Commands::Deploy => {
+            println!("Deploying ocel project...");
         }
     }
 

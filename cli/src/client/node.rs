@@ -1,9 +1,11 @@
-use std::{collections::HashMap, fs::File, io::Write, process::Command};
+use std::{collections::HashMap, fs::File, io::Write};
 
 use anyhow::{Result, bail};
+use async_trait::async_trait;
+use tokio::process::Command;
 
 use crate::{
-    ocel::{DevClient, Ocel},
+    ocel::{DiscoveryClient, Ocel},
     utils,
 };
 
@@ -11,25 +13,10 @@ pub struct NodeClient<'a> {
     ocel: &'a Ocel,
 }
 
-impl<'a> DevClient for NodeClient<'a> {
-    fn start_dev(&self) -> Result<()> {
-        println!("Starting Node.js development server...");
-
+#[async_trait]
+impl<'a> DiscoveryClient for NodeClient<'a> {
+    async fn discover(&self, server_addr: &str) -> Result<()> {
         // initial discovery run
-        self.run_discovery()?;
-
-        Ok(())
-    }
-}
-
-impl<'a> NodeClient<'a> {
-    pub fn new(_ocel: &'a Ocel) -> Self {
-        NodeClient { ocel: _ocel }
-    }
-
-    fn run_discovery(&self) -> Result<()> {
-        println!("Running Node.js discovery...");
-
         let project = self.ocel.current_project.as_ref().unwrap();
         let sources = &project
             .infra_sources
@@ -53,7 +40,6 @@ impl<'a> NodeClient<'a> {
 {}
 
 const __promises: Promise<Response>[] = globalThis.__ocelRegister;
-console.log('Waiting for discovery to complete...', __promises.length, 'resources found.');
 await Promise.all(__promises);
 await fetch(`${{process.env.OCEL_SERVER}}/commit`, {{ method: "POST" }});
         "#,
@@ -72,14 +58,11 @@ await fetch(`${{process.env.OCEL_SERVER}}/commit`, {{ method: "POST" }});
 
         let mut envs = HashMap::new();
 
-        envs.insert(
-            "OCEL_SERVER".to_string(),
-            "http://localhost:8080".to_string(),
-        );
+        envs.insert("OCEL_SERVER".to_string(), format!("http://{}", server_addr));
         envs.insert("OCEL_PHASE".to_string(), "discovery".to_string());
 
         // sdks may depend on some outputs
-        let outputs = self.ocel.get_tofu_outputs()?;
+        let outputs = self.ocel.get_tofu_outputs().await?;
         for (key, value) in outputs {
             envs.insert(key, value);
         }
@@ -88,12 +71,18 @@ await fetch(`${{process.env.OCEL_SERVER}}/commit`, {{ method: "POST" }});
 
         cmd.args([discovery_path.to_str().unwrap()]).envs(envs);
 
-        let status = cmd.status()?;
+        let status = cmd.status().await?;
 
         if !status.success() {
             bail!("Node.js discovery process failed.");
         }
 
         Ok(())
+    }
+}
+
+impl<'a> NodeClient<'a> {
+    pub fn new(_ocel: &'a Ocel) -> Self {
+        NodeClient { ocel: _ocel }
     }
 }

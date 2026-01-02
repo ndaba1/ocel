@@ -3,6 +3,7 @@ pub mod find_up;
 mod globby;
 mod json;
 mod nano_id;
+pub mod watcher;
 
 pub use find_up::find_up;
 pub use globby::globby;

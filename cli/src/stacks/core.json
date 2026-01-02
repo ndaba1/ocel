@@ -1,0 +1,243 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Ocel Core Infrastructure Stack",
+  "Parameters": {
+    "AssetsBucketName": {
+      "Type": "String",
+      "Description": "Unique name for the global assets bucket"
+    }
+  },
+  "Resources": {
+    "OcelAssetsBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": { "Ref": "AssetsBucketName" },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": { "SSEAlgorithm": "AES256" }
+            }
+          ]
+        }
+      }
+    },
+    "OcelTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "OcelTable",
+        "AttributeDefinitions": [
+          { "AttributeName": "pk", "AttributeType": "S" },
+          { "AttributeName": "sk", "AttributeType": "S" },
+          { "AttributeName": "gs1pk", "AttributeType": "S" },
+          { "AttributeName": "gs1sk", "AttributeType": "S" }
+        ],
+        "KeySchema": [
+          { "AttributeName": "pk", "KeyType": "HASH" },
+          { "AttributeName": "sk", "KeyType": "RANGE" }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": true
+        },
+        "GlobalSecondaryIndexes": [
+          {
+            "IndexName": "gs1",
+            "KeySchema": [
+              { "AttributeName": "gs1pk", "KeyType": "HASH" },
+              { "AttributeName": "gs1sk", "KeyType": "RANGE" }
+            ],
+            "Projection": {
+              "ProjectionType": "ALL"
+            }
+          }
+        ]
+      }
+    },
+
+    "OcelVPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [{ "Key": "Name", "Value": "OcelVPC" }]
+      }
+    },
+    "OcelIGW": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": { "Tags": [{ "Key": "Name", "Value": "OcelIGW" }] }
+    },
+    "OcelVPCGatewayAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": { "Ref": "OcelVPC" },
+        "InternetGatewayId": { "Ref": "OcelIGW" }
+      }
+    },
+    "OcelPublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": { "Ref": "OcelVPC" },
+        "Tags": [{ "Key": "Name", "Value": "OcelPublicRouteTable" }]
+      }
+    },
+    "OcelPublicRoute": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "OcelVPCGatewayAttachment",
+      "Properties": {
+        "RouteTableId": { "Ref": "OcelPublicRouteTable" },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": { "Ref": "OcelIGW" }
+      }
+    },
+    "OcelPublicSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": { "Ref": "OcelVPC" },
+        "CidrBlock": "10.0.1.0/24",
+        "MapPublicIpOnLaunch": true,
+        "Tags": [{ "Key": "Name", "Value": "OcelPublicSubnet" }]
+      }
+    },
+    "OcelPublicSubnetRouteAssoc": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": { "Ref": "OcelPublicSubnet" },
+        "RouteTableId": { "Ref": "OcelPublicRouteTable" }
+      }
+    },
+    "OcelPostgresSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow Postgres traffic from anywhere (Dev only)",
+        "VpcId": { "Ref": "OcelVPC" },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 5432,
+            "ToPort": 5432,
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow Postgres"
+          }
+        ]
+      }
+    },
+
+    "OcelCluster": {
+      "Type": "AWS::ECS::Cluster",
+      "Properties": {
+        "ClusterName": "OcelDevCluster",
+        "ClusterSettings": [
+          {
+            "Name": "containerInsights",
+            "Value": "enabled"
+          }
+        ],
+        "CapacityProviders": ["FARGATE", "FARGATE_SPOT"],
+        "DefaultCapacityProviderStrategy": [
+          {
+            "CapacityProvider": "FARGATE_SPOT",
+            "Weight": 1
+          }
+        ]
+      }
+    },
+
+    "OcelLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/ecs/ocel-postgres",
+        "RetentionInDays": 7
+      }
+    },
+    "OcelExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+        ]
+      }
+    },
+
+    "OcelPostgresTaskDef": {
+      "Type": "AWS::ECS::TaskDefinition",
+      "Properties": {
+        "Family": "OcelPostgresTask",
+        "Cpu": "256",
+        "Memory": "512",
+        "NetworkMode": "awsvpc",
+        "RequiresCompatibilities": ["FARGATE"],
+        "ExecutionRoleArn": { "Ref": "OcelExecutionRole" },
+        "ContainerDefinitions": [
+          {
+            "Name": "postgres-container",
+            "Image": "postgres:16-alpine",
+            "Essential": true,
+            "PortMappings": [{ "ContainerPort": 5432, "Protocol": "tcp" }],
+            "LogConfiguration": {
+              "LogDriver": "awslogs",
+              "Options": {
+                "awslogs-group": { "Ref": "OcelLogGroup" },
+                "awslogs-region": { "Ref": "AWS::Region" },
+                "awslogs-stream-prefix": "postgres"
+              }
+            },
+            "Environment": [
+              { "Name": "POSTGRES_PASSWORD", "Value": "postgres" }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "OcelBootstrapVersion": {
+      "Value": "1.0.0",
+      "Export": { "Name": "OcelBootstrapVersion" }
+    },
+    "AssetsBucketName": {
+      "Value": { "Ref": "OcelAssetsBucket" },
+      "Export": { "Name": "OcelAssetsBucketName" }
+    },
+    "OcelTableName": {
+      "Value": { "Ref": "OcelTable" },
+      "Export": { "Name": "OcelTableName" }
+    },
+    "OcelClusterName": {
+      "Value": { "Ref": "OcelCluster" },
+      "Export": { "Name": "OcelClusterName" }
+    },
+    "OcelClusterArn": {
+      "Value": { "Fn::GetAtt": ["OcelCluster", "Arn"] },
+      "Export": { "Name": "OcelClusterArn" }
+    },
+    "OcelPublicSubnetId": {
+      "Value": { "Ref": "OcelPublicSubnet" },
+      "Export": { "Name": "OcelPublicSubnetId" }
+    },
+    "OcelPostgresSecurityGroupId": {
+      "Value": { "Ref": "OcelPostgresSG" },
+      "Export": { "Name": "OcelPostgresSecurityGroupId" }
+    },
+    "OcelPostgresTaskDefArn": {
+      "Value": { "Ref": "OcelPostgresTaskDef" },
+      "Export": { "Name": "OcelPostgresTaskDefArn" }
+    }
+  }
+}
