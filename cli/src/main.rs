@@ -33,6 +33,8 @@ struct Args {
 enum Commands {
     /// Create a new Ocel project
     Init,
+    /// Add components to your project (e.g, services, domains, etc)
+    Add(cmd::AddOpts),
     /// Run your project in development mode
     Dev(cmd::DevOpts),
     /// Deploy your Ocel project
@@ -94,6 +96,9 @@ async fn main() -> Result<()> {
         }
         Commands::Bootstrap(opts) => {
             cmd::bootstrap(opts).await?;
+        }
+        Commands::Add(add_opts) => {
+            cmd::add(&add_opts).await?;
         }
 
         /*

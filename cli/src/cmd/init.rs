@@ -13,9 +13,6 @@ use crate::{
 pub async fn init() -> Result<()> {
     println!("Initializing a new Ocel project...");
 
-    // doesn't matter if we pass None here as we are not loading an existing project
-    let ocel = Ocel::init(None, EnvTarget::Dev).await?;
-
     let project_name = Text::new("What should we name your project ?")
         .with_default("ocel-example")
         .prompt()
@@ -50,7 +47,12 @@ pub async fn init() -> Result<()> {
         project_root: cwd.clone(),
         current_env_name: current_env.clone(),
         current_env_dir: cwd.join(".ocel").join("tofu").join(&current_env),
+        // TODO: init apps ?
+        apps: vec![],
     };
+
+    // doesn't matter if we pass None here as we are not loading an existing project
+    let ocel = Ocel::init(Some(project.clone()), EnvTarget::Dev).await?;
 
     ocel.init_providers().await?;
 

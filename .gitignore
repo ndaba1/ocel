@@ -195,4 +195,5 @@ go.work.sum
 
 # custom
 .ocel
+.workflow-data
 packages/native-lib/

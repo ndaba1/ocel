@@ -25,14 +25,17 @@ export type TriggerUnion = {
 }[keyof TriggerMap];
 
 export interface LambdaConfig<T extends keyof TriggerMap> {
-  handler: (event: any, context: any) => Promise<any>;
+  handler: (event: any, context: any) => Promise<any> | any;
 
   trigger: Extract<TriggerUnion, { type: T }>;
   link?: Component[];
 }
 
 export class Lambda<T extends keyof TriggerMap> implements Component {
-  constructor(public id: string, config: LambdaConfig<T>) {
+  constructor(
+    public id: string,
+    config: LambdaConfig<T>,
+  ) {
     // remove non-serializable stuff
     const { handler, link, ...rest } = config;
     const links = link?.map((component) => component.__id()) || [];
@@ -47,7 +50,7 @@ export class Lambda<T extends keyof TriggerMap> implements Component {
 
       if (!source) {
         throw new Error(
-          "Could not determine caller file for lambda registration"
+          "Could not determine caller file for lambda registration",
         );
       }
 

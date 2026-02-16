@@ -78,7 +78,7 @@ impl Component for WorkflowComponent {
      * - Dispatcher lambda (Go/Rust), read from sqs and invoke the workflow lambda
      * - Durable Lambda function
      * - Auto-instrumentation logic
-     * - Realtime logic ???
+     * - Realtime logic ??? - appsync events api
      */
     fn to_terraform(
         &self,

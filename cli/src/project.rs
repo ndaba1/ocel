@@ -30,6 +30,7 @@ pub struct OcelProject {
     pub name: String,
     pub project_type: ProjectType,
     pub infra_sources: Vec<String>,
+    pub apps: Vec<OcelProjectApp>,
 
     pub project_root: PathBuf,
     pub current_env_name: String,
@@ -41,6 +42,20 @@ pub struct OcelProjectJson {
     pub name: String,
     pub project_type: ProjectType,
     pub infra_sources: Vec<String>,
+    pub apps: Vec<OcelProjectApp>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OcelProjectApp {
+    pub name: String,
+    pub source_dir: PathBuf,
+    pub app_type: OcelProjectAppType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OcelProjectAppType {
+    Container,
+    Serverless,
 }
 
 impl From<&OcelProject> for OcelProjectJson {
@@ -49,11 +64,16 @@ impl From<&OcelProject> for OcelProjectJson {
             name: project.name.clone(),
             project_type: project.project_type,
             infra_sources: project.infra_sources.clone(),
+            apps: project.apps.clone(),
         }
     }
 }
 
 impl OcelProject {
+    fn add_app(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn get_project_root() -> Result<PathBuf> {
         if let Some(proj_dir) = utils::find_up("ocel.json", &std::env::current_dir()?) {
             Ok(proj_dir.parent().unwrap().to_path_buf())
@@ -85,6 +105,7 @@ impl OcelProject {
             project_root: cwd.clone(),
             current_env_name: current_env_name.clone(),
             current_env_dir: cwd.join(".ocel").join("tofu").join(&current_env_name),
+            apps: project_json.apps.clone(),
         })
     }
 }
