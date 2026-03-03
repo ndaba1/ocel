@@ -10,13 +10,13 @@ import type { Express } from "express";
 export function lambda<T extends keyof TriggerMap>(
   id: string,
   app: Express,
-  config?: Omit<LambdaConfig<T>, "trigger" | "handler">
+  config?: Omit<LambdaConfig<T>, "trigger" | "handler">,
 ) {
   const handler = sls(app);
 
   return new Lambda(id, {
     ...config,
-    handler,
+    handler: handler as any,
     trigger: {
       type: "url",
       config: {},

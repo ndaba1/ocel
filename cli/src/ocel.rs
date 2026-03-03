@@ -242,7 +242,7 @@ impl Ocel {
         cmd.args(args)
             .current_dir(cwd)
             .env("FORCE_COLOR", "0")
-            .stdout(Stdio::from(stdout_file))
+            .stdout(Stdio::inherit())
             .stderr(Stdio::from(stderr_file));
 
         if let Some(vars) = env_vars {

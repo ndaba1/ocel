@@ -197,3 +197,4 @@ go.work.sum
 .ocel
 .workflow-data
 packages/native-lib/
+.local/

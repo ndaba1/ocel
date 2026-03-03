@@ -27,7 +27,7 @@
       "name": "random",
       "version": "0.0.0",
       "devDependencies": {
-        "ocel": "^0.0.0",
+        "ocel": "^0.0.0-alpha.0",
       },
     },
     "packages/native-lib/ocel-linux-x64": {
@@ -36,7 +36,7 @@
     },
     "packages/ocel": {
       "name": "ocel",
-      "version": "0.0.0",
+      "version": "0.0.0-alpha.0",
       "bin": {
         "ocel": "./bin/run.js",
       },
@@ -55,6 +55,7 @@
         "zod": "^4.2.1",
       },
       "devDependencies": {
+        "@types/aws-lambda": "^8.10.160",
         "@types/express": "~5.0.0",
         "express": "~5.0.0",
         "hono": "~4.11.1",
@@ -589,6 +590,8 @@
     "@tsconfig/recommended": ["@tsconfig/recommended@1.0.13", "", {}, "sha512-sySRuBfMKyKO/j2ZAhR8kSembhjuPEV4Ra3AHtmWLq51+iGaudr45crPSzNC5b7/Ctrh9dfUpBuTlYrH6rM58Q=="],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.1", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg=="],
+
+    "@types/aws-lambda": ["@types/aws-lambda@8.10.160", "", {}, "sha512-uoO4QVQNWFPJMh26pXtmtrRfGshPUSpMZGUyUQY20FhfHEElEBOPKgVmFs1z+kbpyBsRs2JnoOPT7++Z4GA9pA=="],
 
     "@types/body-parser": ["@types/body-parser@1.19.6", "", { "dependencies": { "@types/connect": "*", "@types/node": "*" } }, "sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g=="],
 
