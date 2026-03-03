@@ -1,7 +1,8 @@
 [package]
 name = "ocel"
-version = "0.0.0"
+version = "0.0.0-alpha.0"
 edition = "2024"
+repository = "https://github.com/ndaba1/ocel"
 
 [dependencies]
 anyhow = "1.0.100"

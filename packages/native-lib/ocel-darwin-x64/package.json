@@ -1,0 +1,11 @@
+{
+  "name": "@ocel/darwin-x64",
+  "version": "0.0.0",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "bin/ocel"
+}

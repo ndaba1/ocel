@@ -22,7 +22,7 @@ switch (platform) {
     throw new Error(`Unsupported platform: ${platform}`);
 }
 
-const binaryPkg = `ocel-${packageName}`;
+const binaryPkg = `@ocel/${packageName}`;
 
 try {
   const binary = process.platform === "win32" ? "ocel.exe" : "ocel";

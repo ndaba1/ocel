@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  check-release:
+    name: Check Release Status
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for unreleased changesets
+        id: check
+        run: |
+          count=$(ls -1 .changeset/*.md 2>/dev/null | grep -v "README.md" | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+  version-pr:
+    name: Create Version PR
+    needs: check-release
+    if: needs.check-release.outputs.is_release == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      
+      - run: bun install --frozen-lockfile
+      
+      - name: Create Release Pull Request
+        uses: changesets/action@v1
+        with:
+          version: bunx changeset version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-binaries:
+    name: Build ${{ matrix.pkg }}
+    needs: check-release
+    if: needs.check-release.outputs.is_release == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            pkg: ocel-linux-x64
+            bin: ocel
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            pkg: ocel-darwin-x64
+            bin: ocel
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            pkg: ocel-darwin-arm64
+            bin: ocel
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            pkg: ocel-win32-x64
+            bin: ocel.exe
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust Target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.pkg }}
+          path: target/${{ matrix.target }}/release/${{ matrix.bin }}
+          retention-days: 1
+
+  publish:
+    name: Publish to npm
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+          
+      # Node is still required purely to set up the .npmrc auth token for changesets
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install Dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Main JS Package
+        run: bun run build
+
+      - name: Download Binary Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Inject Binaries into Workspace Stubs
+        run: |
+          mkdir -p packages/ocel-linux-x64/bin
+          cp artifacts/bin-ocel-linux-x64/ocel packages/ocel-linux-x64/bin/
+          chmod +x packages/ocel-linux-x64/bin/ocel
+
+          mkdir -p packages/ocel-darwin-x64/bin
+          cp artifacts/bin-ocel-darwin-x64/ocel packages/ocel-darwin-x64/bin/
+          chmod +x packages/ocel-darwin-x64/bin/ocel
+
+          mkdir -p packages/ocel-darwin-arm64/bin
+          cp artifacts/bin-ocel-darwin-arm64/ocel packages/ocel-darwin-arm64/bin/
+          chmod +x packages/ocel-darwin-arm64/bin/ocel
+
+          mkdir -p packages/ocel-win32-x64/bin
+          cp artifacts/bin-ocel-win32-x64/ocel.exe packages/ocel-win32-x64/bin/
+
+      - name: Publish All Packages
+        run: bunx changeset publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
