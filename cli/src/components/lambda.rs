@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fs::{self},
-    os::unix::fs::MetadataExt,
     path::PathBuf,
     process::Command,
     sync::{Arc, Mutex},
@@ -13,7 +12,6 @@ use aws_config::{BehaviorVersion, meta::region::RegionProviderChain};
 use aws_sdk_lambda::Client;
 use aws_smithy_types::Blob;
 use base64::{Engine, engine::general_purpose};
-use rand::rand_core::le;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -74,8 +72,69 @@ enum LambdaTrigger {
         #[serde(rename = "apiId")]
         api_id: Option<String>,
         path: String,
-        method: String,
+        method: LambdaTriggerApiMethod,
     },
+}
+
+#[derive(Deserialize, Clone, Copy)]
+enum LambdaTriggerApiMethod {
+    GET,
+    PUT,
+    PATCH,
+    POST,
+    OPTIONS,
+    HEAD,
+    ANY,
+}
+
+impl LambdaTriggerApiMethod {
+    fn to_http_method(&self) -> &'static str {
+        match self {
+            LambdaTriggerApiMethod::GET => "GET",
+            LambdaTriggerApiMethod::PUT => "PUT",
+            LambdaTriggerApiMethod::PATCH => "PATCH",
+            LambdaTriggerApiMethod::POST => "POST",
+            LambdaTriggerApiMethod::OPTIONS => "OPTIONS",
+            LambdaTriggerApiMethod::HEAD => "HEAD",
+            LambdaTriggerApiMethod::ANY => "ANY",
+        }
+    }
+}
+
+/// Parse API path into segments. E.g. "/users/{id}" -> ["users", "{id}"]
+fn parse_api_path(path: &str) -> Result<Vec<String>> {
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Ok(vec![]);
+    }
+    let parts: Vec<String> = trimmed.split('/').map(|s| s.to_string()).collect();
+    for part in &parts {
+        if part.is_empty() {
+            bail!("Invalid API path '{}': empty segment", path);
+        }
+        let valid = part.chars().all(|c| {
+            c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == '{' || c == '}'
+        });
+        if !valid {
+            bail!(
+                "Invalid API path '{}': segment '{}' contains invalid characters",
+                path,
+                part
+            );
+        }
+        if part.starts_with('{') && !part.ends_with('}') {
+            bail!("Invalid API path '{}': malformed path parameter '{}'", path, part);
+        }
+    }
+    Ok(parts)
+}
+
+/// Generate Terraform resource key for a path segment. E.g. ["users", "{id}"] -> "users_id"
+fn path_segment_to_key(segment: &str) -> String {
+    segment
+        .trim_matches(|c| c == '{' || c == '}')
+        .replace('-', "_")
+        .to_lowercase()
 }
 
 impl LambdaComponent {
@@ -410,15 +469,18 @@ impl Component for LambdaComponent {
                         );
 
                         resource.insert(
-                        "aws_cloudwatch_event_target".to_string(),
-                        json!({
-                            &target_key: {
-                                "rule": format!("${{aws_cloudwatch_event_rule.{}.name}}", &rule_key),
-                                "target_id": format!("{}-lambda-target", &self.id),
-                                "arn": format!("${{aws_lambda_function.{}.arn}}", &self.id),
-                            }
-                        }),
-                    );
+                            "aws_cloudwatch_event_target".to_string(),
+                            json!({
+                                &target_key: {
+                                    "rule": format!("${{aws_cloudwatch_event_rule.{}.name}}", &rule_key),
+                                    "target_id": format!("{}-lambda-target", &self.id),
+                                    "arn": format!("${{aws_lambda_function.{}.arn}}", &self.id),
+                                }
+                            }),
+                        );
+
+                        // permission to invoke
+                        resource.insert("aws_lambda_permission".to_string(), json!({}));
                     }
                 }
                 LambdaTrigger::S3 { bucket, events } => {
@@ -455,7 +517,275 @@ impl Component for LambdaComponent {
                     );
                     }
                 }
-                _ => {}
+                LambdaTrigger::Api {
+                    api_id,
+                    path,
+                    method,
+                } => {
+                    let api_id = match api_id {
+                        None => String::from("default_api"),
+                        Some(id) => id.to_owned(),
+                    };
+
+                    let path_parts = parse_api_path(path).expect("Invalid API path");
+                    let api_key = format!("api_{}", api_id.replace('-', "_"));
+                    let project = ocel.current_project.as_ref().unwrap();
+                    let api_name = format!(
+                        "ocel-{}-{}-{}",
+                        project.name,
+                        project.current_env_name,
+                        api_id.replace('-', "_")
+                    );
+
+                    // Data source for region (needed for Lambda integration URI)
+                    if let Some(data) = tf_json.get_mut("data") {
+                        if let Some(data_obj) = data.as_object_mut() {
+                            if !data_obj.contains_key("aws_region") {
+                                data_obj.insert(
+                                    "aws_region".to_string(),
+                                    json!({ "current": {} }),
+                                );
+                            }
+                        }
+                    } else {
+                        tf_json["data"] = json!({
+                            "aws_region": {
+                                "current": {}
+                            }
+                        });
+                    }
+
+                    if let Some(resource) =
+                        tf_json.get_mut("resource").and_then(|r| r.as_object_mut())
+                    {
+                        // REST API
+                        let rest_api_entry = resource
+                            .entry("aws_api_gateway_rest_api".to_string())
+                            .or_insert_with(|| json!({}));
+                        if let Some(apis) = rest_api_entry.as_object_mut() {
+                            apis.entry(api_key.clone()).or_insert_with(|| {
+                                json!({
+                                    "name": api_name,
+                                    "description": "Ocel API Gateway"
+                                })
+                            });
+                        }
+
+                        // Determine target resource for method/integration
+                        let method_resource_id = if path_parts.is_empty() {
+                            // Path "/" - use root
+                            format!("${{aws_api_gateway_rest_api.{}.root_resource_id}}", api_key)
+                        } else {
+                            // Build resource hierarchy
+                            let resources_entry = resource
+                                .entry("aws_api_gateway_resource".to_string())
+                                .or_insert_with(|| json!({}));
+                            let resources = resources_entry.as_object_mut().unwrap();
+
+                            let mut parent_ref = format!(
+                                "${{aws_api_gateway_rest_api.{}.root_resource_id}}",
+                                api_key
+                            );
+                            let mut cumulative_key = String::new();
+
+                            for part in path_parts.iter() {
+                                cumulative_key = if cumulative_key.is_empty() {
+                                    path_segment_to_key(part)
+                                } else {
+                                    format!("{}_{}", cumulative_key, path_segment_to_key(part))
+                                };
+                                let res_key = format!("{}_res_{}", api_key, cumulative_key);
+                                resources.entry(res_key.clone()).or_insert_with(|| {
+                                    json!({
+                                        "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                        "parent_id": parent_ref,
+                                        "path_part": part
+                                    })
+                                });
+                                parent_ref = format!("${{aws_api_gateway_resource.{}.id}}", res_key);
+                            }
+                            format!("${{aws_api_gateway_resource.{}_res_{}.id}}", api_key, cumulative_key)
+                        };
+
+                        let method_http = method.to_http_method();
+
+                        // Method resource
+                        let method_key = format!("{}_api_method", &self.id);
+                        let methods_entry = resource
+                            .entry("aws_api_gateway_method".to_string())
+                            .or_insert_with(|| json!({}));
+                        methods_entry.as_object_mut().unwrap().insert(
+                            method_key.clone(),
+                            json!({
+                                "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                "resource_id": method_resource_id,
+                                "http_method": method_http,
+                                "authorization": "NONE"
+                            }),
+                        );
+
+                        // Lambda integration
+                        let integration_key = format!("{}_api_integration", &self.id);
+                        let integrations_entry = resource
+                            .entry("aws_api_gateway_integration".to_string())
+                            .or_insert_with(|| json!({}));
+                        integrations_entry.as_object_mut().unwrap().insert(
+                            integration_key.clone(),
+                            json!({
+                                "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                "resource_id": method_resource_id,
+                                "http_method": format!("${{aws_api_gateway_method.{}.http_method}}", method_key),
+                                "integration_http_method": "POST",
+                                "type": "AWS_PROXY",
+                                "uri": format!("arn:aws:apigateway:${{data.aws_region.current.name}}:lambda:path/2015-03-31/functions/${{aws_lambda_function.{}.arn}}/invocations", &self.id)
+                            }),
+                        );
+
+                        // Lambda permission for API Gateway
+                        let permission_key = format!("{}_api_permission", &self.id);
+                        let permissions_entry = resource
+                            .entry("aws_lambda_permission".to_string())
+                            .or_insert_with(|| json!({}));
+                        permissions_entry.as_object_mut().unwrap().insert(
+                            permission_key.clone(),
+                            json!({
+                                "statement_id": format!("{}-api-invoke", &self.id),
+                                "action": "lambda:InvokeFunction",
+                                "function_name": format!("${{aws_lambda_function.{}.function_name}}", &self.id),
+                                "principal": "apigateway.amazonaws.com",
+                                "source_arn": format!("${{aws_api_gateway_rest_api.{}.execution_arn}}/*/*", api_key)
+                            }),
+                        );
+
+                        // CORS: OPTIONS method + MOCK integration for the same resource
+                        let cors_method_key = format!("{}_api_cors_method", &self.id);
+                        let cors_methods_entry = resource
+                            .entry("aws_api_gateway_method".to_string())
+                            .or_insert_with(|| json!({}));
+                        cors_methods_entry.as_object_mut().unwrap().insert(
+                            cors_method_key.clone(),
+                            json!({
+                                "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                "resource_id": method_resource_id,
+                                "http_method": "OPTIONS",
+                                "authorization": "NONE"
+                            }),
+                        );
+
+                        let cors_integration_key = format!("{}_api_cors_integration", &self.id);
+                        let cors_integrations_entry = resource
+                            .entry("aws_api_gateway_integration".to_string())
+                            .or_insert_with(|| json!({}));
+                        cors_integrations_entry.as_object_mut().unwrap().insert(
+                            cors_integration_key.clone(),
+                            json!({
+                                "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                "resource_id": method_resource_id,
+                                "http_method": format!("${{aws_api_gateway_method.{}.http_method}}", cors_method_key),
+                                "type": "MOCK",
+                                "request_templates": {
+                                    "application/json": "{\"statusCode\": 200}"
+                                }
+                            }),
+                        );
+
+                        let cors_method_response_key = format!("{}_api_cors_method_response", &self.id);
+                        let method_responses_entry = resource
+                            .entry("aws_api_gateway_method_response".to_string())
+                            .or_insert_with(|| json!({}));
+                        method_responses_entry.as_object_mut().unwrap().insert(
+                            cors_method_response_key.clone(),
+                            json!({
+                                "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                "resource_id": method_resource_id,
+                                "http_method": format!("${{aws_api_gateway_method.{}.http_method}}", cors_method_key),
+                                "status_code": "200",
+                                "response_parameters": {
+                                    "method.response.header.Access-Control-Allow-Origin": true,
+                                    "method.response.header.Access-Control-Allow-Methods": true,
+                                    "method.response.header.Access-Control-Allow-Headers": true
+                                }
+                            }),
+                        );
+
+                        let cors_integration_response_key = format!("{}_api_cors_integration_response", &self.id);
+                        let integration_responses_entry = resource
+                            .entry("aws_api_gateway_integration_response".to_string())
+                            .or_insert_with(|| json!({}));
+                        integration_responses_entry.as_object_mut().unwrap().insert(
+                            cors_integration_response_key.clone(),
+                            json!({
+                                "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                "resource_id": method_resource_id,
+                                "http_method": format!("${{aws_api_gateway_method.{}.http_method}}", cors_method_key),
+                                "status_code": "200",
+                                "response_parameters": {
+                                    "method.response.header.Access-Control-Allow-Origin": "'*'",
+                                    "method.response.header.Access-Control-Allow-Headers": "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'",
+                                    "method.response.header.Access-Control-Allow-Methods": "'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD'"
+                                }
+                            }),
+                        );
+
+                        // Deployment (depends_on accumulates per api_id via json_deep_merge)
+                        let deployment_key = format!("{}_deployment", api_key);
+                        let deployment_entry = resource
+                            .entry("aws_api_gateway_deployment".to_string())
+                            .or_insert_with(|| json!({}));
+                        let deployment_obj = deployment_entry.as_object_mut().unwrap();
+                        let deployment_resource = deployment_obj.entry(deployment_key.clone()).or_insert_with(|| {
+                            json!({
+                                "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                "depends_on": [format!("aws_api_gateway_integration.{}", integration_key)],
+                                "lifecycle": {
+                                    "create_before_destroy": true
+                                }
+                            })
+                        });
+                        if let Some(dep) = deployment_resource.as_object_mut() {
+                            if let Some(depends_on) = dep.get_mut("depends_on") {
+                                if let Some(arr) = depends_on.as_array_mut() {
+                                    let dep_ref = format!("aws_api_gateway_integration.{}", integration_key);
+                                    if !arr.iter().any(|v| v.as_str() == Some(dep_ref.as_str())) {
+                                        arr.push(serde_json::Value::String(dep_ref));
+                                    }
+                                    let cors_dep_ref = format!("aws_api_gateway_integration.{}", cors_integration_key);
+                                    if !arr.iter().any(|v| v.as_str() == Some(cors_dep_ref.as_str())) {
+                                        arr.push(serde_json::Value::String(cors_dep_ref));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Stage
+                        let stage_key = format!("{}_stage", api_key);
+                        let stages_entry = resource
+                            .entry("aws_api_gateway_stage".to_string())
+                            .or_insert_with(|| json!({}));
+                        stages_entry.as_object_mut().unwrap().entry(stage_key.clone()).or_insert_with(|| {
+                            json!({
+                                "deployment_id": format!("${{aws_api_gateway_deployment.{}.id}}", deployment_key),
+                                "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
+                                "stage_name": project.current_env_name
+                            })
+                        });
+                    }
+
+                    // Output: API URL
+                    let stage_key = format!("{}_stage", api_key);
+                    let output_key = format!("RESOURCE_{}_API_URL", api_id.to_uppercase().replace('-', "_"));
+                    if let Some(output) = tf_json.get_mut("output").and_then(|o| o.as_object_mut()) {
+                        output.entry(output_key).or_insert_with(|| {
+                            json!({
+                                "value": format!(
+                                    "https://${{aws_api_gateway_rest_api.{}.id}}.execute-api.${{data.aws_region.current.name}}.amazonaws.com/${{aws_api_gateway_stage.{}.stage_name}}",
+                                    api_key,
+                                    stage_key
+                                )
+                            })
+                        });
+                    }
+                }
             }
         }
         tf_json
