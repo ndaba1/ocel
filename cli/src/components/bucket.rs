@@ -332,6 +332,8 @@ fn build_blob_listener_artifact(
             out_file.to_str().unwrap(),
             "--target",
             "node",
+            "--format",
+            "cjs",
             "--minify",
         ])
         .status()

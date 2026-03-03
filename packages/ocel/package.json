@@ -17,6 +17,10 @@
       "import": "./dist/blob/index.js",
       "types": "./dist/blob/index.d.ts"
     },
+    "./blob/client": {
+      "import": "./dist/blob/integrations/client.js",
+      "types": "./dist/blob/integrations/client.d.ts"
+    },
     "./blob/*": {
       "import": "./dist/blob/integrations/*.js",
       "types": "./dist/blob/integrations/*.d.ts"
@@ -40,7 +44,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:listener": "bun build src/blob/s3-listener.ts --outfile=dist/blob-listener/index.js --target=node --minify"
+    "build:listener": "bun build src/blob/s3-listener.ts --outfile=dist/blob-listener/index.js --target=node --format=cjs --minify"
   },
   "license": "MIT",
   "packageManager": "pnpm@10.18.3",

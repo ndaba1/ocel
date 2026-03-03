@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "description": "",
   "main": "index.js",
+  "exports": {
+    "./storage": "./src/infra/storage.ts"
+  },
   "scripts": {
     "dev": "RUST_LOG=error,ocel=debug ocel dev -- bun ./src/app.ts"
   },
