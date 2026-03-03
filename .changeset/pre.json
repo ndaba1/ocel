@@ -1,0 +1,15 @@
+{
+  "mode": "pre",
+  "tag": "alpha",
+  "initialVersions": {
+    "@examples/blob-upload": "0.0.0",
+    "@examples/hono": "0.0.0",
+    "@examples/random": "0.0.0",
+    "@ocel/darwin-arm64": "0.0.0",
+    "@ocel/darwin-x64": "0.0.0",
+    "@ocel/linux-x64": "0.0.0",
+    "@ocel/win32-x64": "0.0.0",
+    "ocel": "0.0.0"
+  },
+  "changesets": []
+}
