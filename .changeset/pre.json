@@ -11,5 +11,7 @@
     "@ocel/win32-x64": "0.0.0",
     "ocel": "0.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "sweet-rocks-open"
+  ]
 }
