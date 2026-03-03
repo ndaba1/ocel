@@ -11,6 +11,6 @@
   "license": "MIT",
   "packageManager": "pnpm@10.18.3",
   "devDependencies": {
-    "ocel": "^0.0.1-alpha.0"
+    "ocel": "workspace:^"
   }
 }

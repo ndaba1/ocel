@@ -18,14 +18,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check for unreleased changesets
-        id: check
+        id: check-release
         run: |
-          count=$(ls -1 .changeset/*.md 2>/dev/null | grep -v "README.md" | wc -l)
-          if [ "$count" -eq 0 ]; then
-            echo "is_release=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_release=false" >> $GITHUB_OUTPUT
-          fi
+          cat << 'EOF' > check.js
+          const fs = require('fs');
+          const dir = '.changeset';
+          
+          // If the .changeset folder doesn't exist at all, we're clear to publish
+          if (!fs.existsSync(dir)) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'is_release=true\n');
+            process.exit(0);
+          }
+          
+          // Get all markdown files
+          const mdFiles = fs.readdirSync(dir).filter(f => f.endsWith('.md') && f !== 'README.md');
+          
+          // Check what has been consumed in pre mode
+          let consumed = [];
+          const prePath = `${dir}/pre.json`;
+          if (fs.existsSync(prePath)) {
+            consumed = JSON.parse(fs.readFileSync(prePath, 'utf8')).changesets || [];
+          }
+          
+          // An unreleased changeset is an .md file that is NOT listed in pre.json
+          const unreleased = mdFiles.filter(f => !consumed.includes(f.replace('.md', '')));
+          
+          // If 0 unreleased changesets, it's time to trigger Phase 3 and 4!
+          const isRelease = unreleased.length === 0;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `is_release=${isRelease}\n`);
+          EOF
+          
+          node check.js
 
   version-pr:
     name: Create Version PR
