@@ -1,0 +1,8 @@
+{
+  "name": "ocel-example",
+  "project_type": "typescript",
+  "infra_sources": [
+    "./src/**/*.ts"
+  ],
+  "apps": []
+}

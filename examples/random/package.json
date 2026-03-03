@@ -1,0 +1,16 @@
+{
+  "name": "random",
+  "version": "0.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "RUST_LOG=error,ocel=debug ocel dev"
+  },
+  "keywords": [],
+  "author": "Victor Ndaba",
+  "license": "MIT",
+  "packageManager": "pnpm@10.18.3",
+  "devDependencies": {
+    "ocel": "^0.0.0-alpha.0"
+  }
+}

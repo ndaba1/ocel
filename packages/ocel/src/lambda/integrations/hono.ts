@@ -10,13 +10,13 @@ import { handle } from "hono/aws-lambda";
 export function lambda<T extends keyof TriggerMap>(
   id: string,
   app: Hono,
-  config?: Omit<LambdaConfig<T>, "trigger" | "handler">
+  config?: Omit<LambdaConfig<T>, "trigger" | "handler">,
 ) {
   const handler = handle(app);
 
   return new Lambda(id, {
     ...config,
-    handler,
+    handler: handler as any,
     trigger: {
       type: "url",
       config: {},

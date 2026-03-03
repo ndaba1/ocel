@@ -1,6 +1,6 @@
 {
   "name": "ocel",
-  "version": "0.0.0",
+  "version": "0.0.0-alpha.0",
   "type": "module",
   "description": "The power of AWS with the DX of Vercel",
   "bin": {
@@ -46,10 +46,11 @@
     "ocel-linux-x64": "workspace:^"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "hono": "~4.11.1",
+    "@types/aws-lambda": "^8.10.160",
     "@types/express": "~5.0.0",
-    "express": "~5.0.0"
+    "express": "~5.0.0",
+    "hono": "~4.11.1",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.958.0",

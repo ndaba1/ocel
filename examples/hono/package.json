@@ -1,0 +1,22 @@
+{
+  "name": "@examples/hono",
+  "version": "0.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "RUST_LOG=error,ocel=debug ocel dev -- bun ./src/app.ts"
+  },
+  "keywords": [],
+  "author": "Victor Ndaba",
+  "license": "MIT",
+  "devDependencies": {
+    "ocel": "workspace:^"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.7",
+    "hono": "^4.11.3",
+    "nitro": "^3.0.1-alpha.1",
+    "rollup": "^4.54.0",
+    "workflow": "^4.0.1-beta.39"
+  }
+}
