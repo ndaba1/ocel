@@ -15,7 +15,6 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getNanoid } from "../utils/nanoid";
 import { UploadSession } from "../internal/db";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { IS_DEV_MODE } from "../utils/constants";
 import type { ZodType } from "zod";
 import { parseFileSize, parseReq } from "./parse";
 import type { Bucket } from "./bucket";
@@ -42,10 +41,12 @@ export class Uploader<TMeta = unknown> {
     action,
     body,
     request,
+    sessionId,
   }: {
     request: Request | IncomingMessage;
     body: HandleUploadBody;
     action: "presign" | "callback" | "poll";
+    sessionId?: string;
   }) {
     try {
       const req = parseReq(request);
@@ -115,9 +116,47 @@ export class Uploader<TMeta = unknown> {
           return provider.presign(files);
         }
         case "poll": {
-          // TODO: response flushing for SSE
+          if (!sessionId) {
+            throw UploadError.badRequest("sessionId is required for poll");
+          }
 
-          return {};
+          const result = await UploadSession.query
+            .sessions({ sessionId })
+            .go();
+
+          const files = result.data.map((record) => {
+            let parsedMeta: TMeta = {} as TMeta;
+            try {
+              if (record.metadata) {
+                parsedMeta = JSON.parse(record.metadata) as TMeta;
+              }
+            } catch {
+              // ignore parse errors
+            }
+            return {
+              fileKey: record.fileKey,
+              status: record.status,
+              file:
+                record.status === "SUCCESS"
+                  ? {
+                      path: record.fileKey,
+                      contentDisposition:
+                        record.contentDisposition || "inline",
+                      contentType: record.contentType,
+                    }
+                  : undefined,
+              metadata: parsedMeta,
+            };
+          });
+
+          const allComplete = files.every(
+            (f) => f.status === "SUCCESS" || f.status === "FAILED"
+          );
+
+          return {
+            files,
+            completed: allComplete,
+          };
         }
         case "callback": {
           // TODO: validate callback body
@@ -160,134 +199,130 @@ export class Uploader<TMeta = unknown> {
     }
   }
 
+  private startPolling(sessionId: string): void {
+    const POLL_INTERVAL_MS = 1000;
+    const MAX_DURATION_MS = 10 * 60 * 1000; // 10 minutes
+    const startTime = Date.now();
+
+    const tick = async (): Promise<boolean> => {
+      if (Date.now() - startTime > MAX_DURATION_MS) {
+        return true;
+      }
+
+      const result = await UploadSession.query
+        .sessions({ sessionId })
+        .go();
+
+      const allComplete = result.data.every(
+        (r) => r.status === "SUCCESS" || r.status === "FAILED"
+      );
+
+      if (!allComplete) {
+        return false;
+      }
+
+      // Session complete - invoke callbacks
+      for (const record of result.data) {
+        let parsedMeta: TMeta = {} as TMeta;
+        try {
+          if (record.metadata) {
+            parsedMeta = JSON.parse(record.metadata) as TMeta;
+          }
+        } catch {
+          // ignore
+        }
+
+        if (record.status === "SUCCESS") {
+          await this.config.onUploadComplete?.({
+            metadata: parsedMeta,
+            file: {
+              path: record.fileKey,
+              contentDisposition: record.contentDisposition || "inline",
+              contentType: record.contentType,
+            },
+          });
+        } else if (record.status === "FAILED" && this.config.onUploadError) {
+          this.config.onUploadError({
+            error: new UploadError(
+              `Upload failed for ${record.fileKey}`,
+              500,
+              "UPLOAD_FAILED"
+            ),
+          });
+        }
+      }
+
+      return true;
+    };
+
+    const intervalId = setInterval(async () => {
+      try {
+        const done = await tick();
+        if (done) {
+          clearInterval(intervalId);
+        }
+      } catch {
+        clearInterval(intervalId);
+      }
+    }, POLL_INTERVAL_MS);
+  }
+
   getProvider() {
     const bucket = this.bucket;
-    const config = this.config;
     const bucketId = bucket.__name();
 
-    if (IS_DEV_MODE) {
-      return {
-        presign: async (files: UploadFileBody[]) => {
-          const s3Client = new S3Client();
-          const sessionId = getNanoid(8);
+    return {
+      presign: async (files: UploadFileBody[]) => {
+        const s3Client = new S3Client();
+        const sessionId = getNanoid(8);
 
-          const presignedFiles = await Promise.all(
-            files.map(async (file) => {
-              // create new session and set status to pending
-              await UploadSession.create({
-                sessionId,
-                bucketName: bucketId,
-                fileKey: file.key,
-                createdAt: new Date().toISOString(),
-                status: "PENDING",
-                contentType: file.mimeType,
-                contentDisposition: file.disposition,
-                fileSize: file.size,
-                metadata: file.metadata
-                  ? JSON.stringify(file.metadata)
-                  : undefined,
-              }).go();
-
-              const url = await getSignedUrl(
-                s3Client,
-                new PutObjectCommand({
-                  Key: file.key,
-                  Bucket: bucketId,
-                  // TODO: find out why this breaks uploads
-                  // ContentDisposition: file.disposition,
-                  // ContentLength: file.size,
-                  ContentType: file.mimeType,
-                  Metadata: file.metadata,
-                }),
-                { expiresIn: 3600 }
-              );
-
-              return {
-                url,
-                key: file.key,
-                name: file.name,
-              };
-            })
-          );
-
-          const startPolling = async () => {
-            const pendingFiles = new Set(files.map((f) => f.key));
-            let attempts = 0;
-            const MAX_ATTEMPTS = 120;
-
-            const checkStatus = async () => {
-              // Stop if nothing left to track or timeout reached
-              if (pendingFiles.size === 0 || attempts >= MAX_ATTEMPTS) return;
-
-              attempts++;
-
-              try {
-                // Query all files in this session
-                const result = await UploadSession.query
-                  .sessions({ sessionId })
-                  .go();
-
-                for (const record of result.data) {
-                  // Only process files we are actively tracking
-                  if (!pendingFiles.has(record.fileKey)) continue;
-
-                  if (record.status === "SUCCESS") {
-                    pendingFiles.delete(record.fileKey);
-
-                    let parsedMeta: TMeta = {} as TMeta;
-                    try {
-                      if (record.metadata) {
-                        parsedMeta = JSON.parse(record.metadata);
-                      }
-                    } catch (e) {
-                      console.warn("Failed to parse metadata for callback", e);
-                    }
-
-                    await config.onUploadComplete?.({
-                      file: {
-                        path: record.fileKey,
-                        contentDisposition:
-                          record.contentDisposition || "inline",
-                        contentType: record.contentType,
-                      },
-                      metadata: parsedMeta,
-                    });
-                  } else if (record.status === "FAILED") {
-                    // Stop tracking failed files so we don't loop forever
-                    pendingFiles.delete(record.fileKey);
-
-                    config.onUploadError?.({
-                      error: new UploadError(
-                        `Upload failed for ${record.fileKey}`,
-                        500,
-                        "UPLOAD_FAILED"
-                      ),
-                    });
-                  }
-                }
-              } catch (err) {
-                console.error("Polling error (will retry):", err);
-              }
-
-              if (pendingFiles.size > 0) {
-                setTimeout(checkStatus, 1000);
-              }
+        const presignedFiles = await Promise.all(
+          files.map(async (file) => {
+            const metadataWithSession = {
+              ...file.metadata,
+              "x-ocel-session-id": sessionId,
             };
 
-            checkStatus();
-          };
+            await UploadSession.create({
+              sessionId,
+              bucketName: bucketId,
+              fileKey: file.key,
+              createdAt: new Date().toISOString(),
+              status: "PENDING",
+              contentType: file.mimeType,
+              contentDisposition: file.disposition,
+              fileSize: file.size,
+              metadata: file.metadata
+                ? JSON.stringify(file.metadata)
+                : undefined,
+            }).go();
 
-          startPolling();
+            const url = await getSignedUrl(
+              s3Client,
+              new PutObjectCommand({
+                Key: file.key,
+                Bucket: bucketId,
+                ContentType: file.mimeType,
+                Metadata: metadataWithSession,
+              }),
+              { expiresIn: 3600 }
+            );
 
-          return {
-            files: presignedFiles,
-          };
-        },
-      };
-    }
+            return {
+              url,
+              key: file.key,
+              name: file.name,
+            };
+          })
+        );
 
-    return {
-      presign: async () => {},
+        this.startPolling(sessionId);
+
+        return {
+          files: presignedFiles,
+          sessionId,
+        };
+      },
     };
   }
 

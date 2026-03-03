@@ -9,6 +9,7 @@
   "files": [
     "bin/",
     "dist/",
+    "src/",
     "README.md"
   ],
   "exports": {
@@ -38,7 +39,8 @@
     }
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "build:listener": "bun build src/blob/s3-listener.ts --outfile=dist/blob-listener/index.js --target=node --minify"
   },
   "license": "MIT",
   "packageManager": "pnpm@10.18.3",
