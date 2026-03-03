@@ -34,16 +34,16 @@ export function createUploadClient<TBucket extends Bucket<any>>(opts: {
         ? {
             files: File[];
             onClientUploadComplete?: (
-              res: InferReturn<TBucket["_shape"], K>
+              res: InferReturn<TBucket["_shape"], K>,
             ) => void;
           }
         : {
             files: File[];
             input: z.infer<InferInput<TBucket["_shape"], K>>;
             onClientUploadComplete?: (
-              res: InferReturn<TBucket["_shape"], K>
+              res: InferReturn<TBucket["_shape"], K>,
             ) => void;
-          }
+          },
     ) => {
       const url = opts.url;
       const searchParams = new URLSearchParams();
@@ -81,11 +81,11 @@ export function createUploadClient<TBucket extends Bucket<any>>(opts: {
             method: "PUT",
             headers: {
               "Content-Type": file.type,
-              "x-amz-meta-x-ocel-session-id": result.sessionId,
+              "Content-Disposition": "inline",
             },
             body: file,
           });
-        })
+        }),
       );
 
       // poll for completion (S3 listener Lambda updates DynamoDB when upload lands)
@@ -110,7 +110,7 @@ export function createUploadClient<TBucket extends Bucket<any>>(opts: {
 
       if (args.onClientUploadComplete && pollResult.files) {
         const completedFiles = pollResult.files.filter(
-          (f) => f.status === "SUCCESS" && f.file
+          (f) => f.status === "SUCCESS" && f.file,
         );
         const results = completedFiles.map((f) => ({
           file: f.file!,
@@ -118,7 +118,7 @@ export function createUploadClient<TBucket extends Bucket<any>>(opts: {
         }));
         if (results.length > 0) {
           args.onClientUploadComplete(
-            results.length === 1 ? results[0] : (results as any)
+            results.length === 1 ? results[0] : (results as any),
           );
         }
       }

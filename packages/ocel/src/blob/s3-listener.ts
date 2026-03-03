@@ -5,10 +5,7 @@
  */
 import type { S3Handler, S3Event } from "aws-lambda";
 import { HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import {
-  UpdateItemCommand,
-  DynamoDBClient,
-} from "@aws-sdk/client-dynamodb";
+import { UpdateItemCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 const s3 = new S3Client({});
 const dynamo = new DynamoDBClient({});
@@ -21,13 +18,13 @@ export const handler: S3Handler = async (event: S3Event) => {
 
     try {
       const head = await s3.send(
-        new HeadObjectCommand({ Bucket: bucket, Key: key })
+        new HeadObjectCommand({ Bucket: bucket, Key: key }),
       );
       const sessionId = head.Metadata?.["x-ocel-session-id"];
       if (!sessionId) continue;
 
-      const pk = `SESSION#${sessionId}`;
-      const sk = `FILE#${bucket}#${key}`;
+      const pk = `SESSION#${sessionId}`.toLowerCase();
+      const sk = `FILE#${bucket}#${key}`.toLowerCase();
 
       await dynamo.send(
         new UpdateItemCommand({
@@ -42,7 +39,7 @@ export const handler: S3Handler = async (event: S3Event) => {
             ":status": { S: "SUCCESS" },
             ":now": { S: new Date().toISOString() },
           },
-        })
+        }),
       );
     } catch (err) {
       console.error(`Failed to update session for ${bucket}/${key}:`, err);
