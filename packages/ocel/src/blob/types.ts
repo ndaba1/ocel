@@ -32,6 +32,7 @@ export type PresignUploadResponse = {
     key: string;
     name: string;
   }[];
+  sessionId: string;
 };
 
 export type CallbackBody<TMeta> = {

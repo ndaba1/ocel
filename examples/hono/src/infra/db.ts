@@ -1,11 +1,9 @@
-import { postgres } from "ocel/postgres";
+// export const db = postgres("mainDb", {
+//   version: "17",
+//   migrations: "src/infra/migrations",
+// });
 
-export const db = postgres("mainDb", {
-  version: "17",
-  migrations: "src/infra/migrations",
-});
-
-export async function getUsers() {
-  const result = await db.sql("SELECT * FROM users;");
-  return result;
-}
+// export async function getUsers() {
+//   const result = await db.sql("SELECT * FROM users;");
+//   return result;
+// }

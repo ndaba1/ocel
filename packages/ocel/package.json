@@ -9,12 +9,17 @@
   "files": [
     "bin/",
     "dist/",
+    "src/",
     "README.md"
   ],
   "exports": {
     "./blob": {
       "import": "./dist/blob/index.js",
       "types": "./dist/blob/index.d.ts"
+    },
+    "./blob/client": {
+      "import": "./dist/blob/integrations/client.js",
+      "types": "./dist/blob/integrations/client.d.ts"
     },
     "./blob/*": {
       "import": "./dist/blob/integrations/*.js",
@@ -38,7 +43,8 @@
     }
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "build:listener": "bun build src/blob/s3-listener.ts --outfile=dist/blob-listener/index.js --target=node --format=cjs --minify"
   },
   "license": "MIT",
   "packageManager": "pnpm@10.18.3",

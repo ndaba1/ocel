@@ -67,8 +67,9 @@ export class Bucket<
     }
 
     const querySchema = z.object({
-      action: z.enum(["presign", "callback"]),
+      action: z.enum(["presign", "callback", "poll"]),
       uploader: z.enum(Object.keys(this._shape) as [string, ...string[]]),
+      sessionId: z.string().optional(),
     });
     const queryRes = querySchema.safeParse(Object.fromEntries(parsedReq.query));
     if (!queryRes.success) {
@@ -85,6 +86,7 @@ export class Bucket<
       body,
       request,
       action: query.action,
+      sessionId: query.sessionId,
     });
   };
 }

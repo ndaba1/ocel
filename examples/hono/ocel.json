@@ -1,5 +1,6 @@
 {
   "name": "ocel-example",
   "project_type": "typescript",
-  "infra_sources": ["./src/infra/**/*.ts", "./src/workflows/**/*.ts"]
+  "infra_sources": ["./src/infra/**/*.ts", "./src/workflows/**/*.ts"],
+  "apps": []
 }
