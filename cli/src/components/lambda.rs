@@ -681,7 +681,7 @@ impl Component for LambdaComponent {
                             json!({
                                 "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
                                 "resource_id": method_resource_id,
-                                "http_method": format!("${{aws_api_gateway_method.{}.http_method}}", cors_method_key),
+                                "http_method": "OPTIONS",
                                 "type": "MOCK",
                                 "request_templates": {
                                     "application/json": "{\"statusCode\": 200}"
@@ -698,7 +698,7 @@ impl Component for LambdaComponent {
                             json!({
                                 "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
                                 "resource_id": method_resource_id,
-                                "http_method": format!("${{aws_api_gateway_method.{}.http_method}}", cors_method_key),
+                                "http_method": "OPTIONS",
                                 "status_code": "200",
                                 "response_parameters": {
                                     "method.response.header.Access-Control-Allow-Origin": true,
@@ -717,13 +717,14 @@ impl Component for LambdaComponent {
                             json!({
                                 "rest_api_id": format!("${{aws_api_gateway_rest_api.{}.id}}", api_key),
                                 "resource_id": method_resource_id,
-                                "http_method": format!("${{aws_api_gateway_method.{}.http_method}}", cors_method_key),
+                                "http_method": "OPTIONS",
                                 "status_code": "200",
                                 "response_parameters": {
                                     "method.response.header.Access-Control-Allow-Origin": "'*'",
                                     "method.response.header.Access-Control-Allow-Headers": "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'",
                                     "method.response.header.Access-Control-Allow-Methods": "'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD'"
-                                }
+                                },
+                                "depends_on": [format!("aws_api_gateway_integration.{}", cors_integration_key)]
                             }),
                         );
 
