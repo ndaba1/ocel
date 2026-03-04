@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::File, io::Write};
+use std::{collections::HashMap, fs::File, io::Write, process::Stdio};
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
@@ -72,12 +72,16 @@ await fetch(`${{process.env.OCEL_SERVER}}/commit`, {{ method: "POST" }});
 
         let mut cmd = Command::new(&self.ocel.bun_bin_path);
 
-        cmd.args([discovery_path.to_str().unwrap()]).envs(envs);
+        cmd.args([discovery_path.to_str().unwrap()])
+            .envs(envs)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
 
-        let status = cmd.status().await?;
+        let output = cmd.output().await?;
 
-        if !status.success() {
-            bail!("Node.js discovery process failed.");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Node.js discovery process failed:\n{}", stderr);
         }
 
         info!("Discovery complete");

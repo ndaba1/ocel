@@ -5,33 +5,62 @@ use std::process::Stdio;
 use tokio::{
     process::{Child, Command},
     signal,
-    sync::broadcast,
+    sync::{broadcast, oneshot},
 };
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error, info};
 use url::Url;
 
-pub async fn run_internal_follower(mut rx: broadcast::Receiver<IpcMessage>, user_cmd: Vec<String>) {
+pub async fn run_internal_follower(
+    mut rx: broadcast::Receiver<IpcMessage>,
+    user_cmd: Vec<String>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+) {
     let mut current_child: Option<Child> = None;
+    let mut last_envs: Option<Vec<(String, String)>> = None;
     info!("🔌 Internal follower attached.");
 
-    while let Ok(msg) = rx.recv().await {
-        match msg {
-            IpcMessage::EnvVars(envs) => {
-                restart_process(&mut current_child, &user_cmd, envs).await;
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(IpcMessage::EnvVars(mut new_envs)) => {
+                        new_envs.sort();
+
+                        if let Some(last) = &last_envs {
+                            if last == &new_envs {
+                                debug!("Outputs unchanged. Skipping restart.");
+                                continue;
+                            }
+                        }
+
+                        last_envs = Some(new_envs.clone());
+                        restart_process(&mut current_child, &user_cmd, new_envs).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            _ = &mut shutdown_rx => {
+                debug!("Shutdown signal received in internal follower.");
+                break;
             }
         }
     }
+
+    if let Some(child) = current_child.take() {
+        info!("Shutting down child process...");
+        kill_process_group(child).await;
+    }
 }
 
-// --- 2. Shared Process Logic (The Zombie Killer) ---
+// --- Shared Process Logic ---
 
 async fn restart_process(
     current_child: &mut Option<Child>,
     user_cmd: &[String],
     envs: Vec<(String, String)>,
 ) {
-    // A. Kill existing process group
     if let Some(child) = current_child.take() {
         info!("♻️  Restarting process...");
         kill_process_group(child).await;
@@ -39,16 +68,14 @@ async fn restart_process(
         info!("🚀 Starting process...");
     }
 
-    // B. Start new process
     if !user_cmd.is_empty() {
         let prog = &user_cmd[0];
         let args = &user_cmd[1..];
 
-        // On Unix, we set a process group so we can kill the whole tree later
         #[cfg(unix)]
         let mut cmd = Command::new(prog);
         #[cfg(unix)]
-        cmd.process_group(0); // Create new PGID
+        cmd.process_group(0);
 
         #[cfg(windows)]
         let mut cmd = Command::new(prog);
@@ -72,7 +99,7 @@ async fn restart_process(
     }
 }
 
-/// Properly kills a process and its children using Process Groups
+/// Kills a process and its children using process groups
 async fn kill_process_group(mut child: Child) {
     #[cfg(unix)]
     {
@@ -80,7 +107,6 @@ async fn kill_process_group(mut child: Child) {
         use nix::unistd::Pid;
 
         if let Some(id) = child.id() {
-            // Send SIGTERM to the whole process group (negative PID)
             let _ = signal::kill(Pid::from_raw(-(id as i32)), Signal::SIGTERM);
         }
     }
@@ -103,50 +129,53 @@ pub async fn run_follower(leader_port: u16, user_cmd: Vec<String>) -> Result<()>
 
     let (_, mut read) = ws_stream.split();
     let mut current_child: Option<Child> = None;
-
     let mut last_envs: Option<Vec<(String, String)>> = None;
 
-    // Wait for messages from the Leader
     loop {
         tokio::select! {
-            Some(msg) = read.next() => {
-                let msg = msg?;
-                if let Message::Text(text) = msg {
-                    let ipc_msg: IpcMessage = serde_json::from_str(&text)?;
+            msg_opt = read.next() => {
+                match msg_opt {
+                    Some(Ok(Message::Text(text))) => {
+                        let ipc_msg: IpcMessage = serde_json::from_str(&text)?;
 
-                    match ipc_msg {
-                        IpcMessage::EnvVars(mut new_envs) => {
-                            // Sort to ensure consistent comparison
-                            new_envs.sort();
+                        match ipc_msg {
+                            IpcMessage::EnvVars(mut new_envs) => {
+                                new_envs.sort();
 
-                            // CHECK: Did anything actually change?
-                            if let Some(last) = &last_envs {
-                                if last == &new_envs {
-                                    debug!(
-                                        "Example: Tofu ran, but outputs are identical. Skipping restart."
-                                    );
-                                    continue;
+                                if let Some(last) = &last_envs {
+                                    if last == &new_envs {
+                                        debug!("Outputs unchanged. Skipping restart.");
+                                        continue;
+                                    }
                                 }
+
+                                last_envs = Some(new_envs.clone());
+                                restart_process(&mut current_child, &user_cmd, new_envs).await;
                             }
-
-                            // Update state
-                            last_envs = Some(new_envs.clone());
-
-                            // Restart Logic (same as before)
-                            restart_process(&mut current_child, &user_cmd, new_envs).await;
                         }
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => {
+                        error!("WebSocket error: {}", e);
+                        break;
+                    }
+                    None => {
+                        info!("Leader disconnected.");
+                        break;
                     }
                 }
             }
 
             _ = signal::ctrl_c() => {
-                info!("🛑 Received Ctrl+C, shutting down child process...");
-                if let Some(child) = current_child.take() {
-                    kill_process_group(child).await;
-                }
+                info!("Received Ctrl+C, shutting down...");
                 break;
             }
         }
+    }
+
+    if let Some(child) = current_child.take() {
+        info!("Shutting down child process...");
+        kill_process_group(child).await;
     }
 
     Ok(())
