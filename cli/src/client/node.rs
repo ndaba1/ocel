@@ -1,8 +1,9 @@
-use std::{collections::HashMap, fs::File, io::Write};
+use std::{collections::HashMap, fs::File, io::Write, process::Stdio};
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use tokio::process::Command;
+use tracing::info;
 
 use crate::{
     ocel::{DiscoveryClient, Ocel},
@@ -16,6 +17,8 @@ pub struct NodeClient<'a> {
 #[async_trait]
 impl<'a> DiscoveryClient for NodeClient<'a> {
     async fn discover(&self, server_addr: &str) -> Result<()> {
+        info!("Discovering infrastructure...");
+
         // initial discovery run
         let project = self.ocel.current_project.as_ref().unwrap();
         let sources = &project
@@ -69,13 +72,19 @@ await fetch(`${{process.env.OCEL_SERVER}}/commit`, {{ method: "POST" }});
 
         let mut cmd = Command::new(&self.ocel.bun_bin_path);
 
-        cmd.args([discovery_path.to_str().unwrap()]).envs(envs);
+        cmd.args([discovery_path.to_str().unwrap()])
+            .envs(envs)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
 
-        let status = cmd.status().await?;
+        let output = cmd.output().await?;
 
-        if !status.success() {
-            bail!("Node.js discovery process failed.");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Node.js discovery process failed:\n{}", stderr);
         }
+
+        info!("Discovery complete");
 
         Ok(())
     }

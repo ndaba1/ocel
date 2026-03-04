@@ -395,6 +395,10 @@ impl Component for LambdaComponent {
                         "s3_bucket": s3_bucket,
                         "s3_key": s3_key,
                         "source_code_hash": source_hash,
+                        "depends_on": [
+                            format!("aws_s3_object.{}", &keys.artifact_key),
+                            format!("aws_iam_role.{}", &keys.role_key)
+                        ]
                     }
                 },
                 "aws_s3_object": {
@@ -454,6 +458,7 @@ impl Component for LambdaComponent {
                 LambdaTrigger::Cron { schedule } => {
                     let rule_key = format!("{}_cron_rule", &self.id);
                     let target_key = format!("{}_cron_target", &self.id);
+                    let permission_key = format!("{}_cron_permission", &self.id);
 
                     if let Some(resource) =
                         tf_json.get_mut("resource").and_then(|r| r.as_object_mut())
@@ -479,8 +484,19 @@ impl Component for LambdaComponent {
                             }),
                         );
 
-                        // permission to invoke
-                        resource.insert("aws_lambda_permission".to_string(), json!({}));
+                        let permissions_entry = resource
+                            .entry("aws_lambda_permission".to_string())
+                            .or_insert_with(|| json!({}));
+                        permissions_entry.as_object_mut().unwrap().insert(
+                            permission_key,
+                            json!({
+                                "statement_id": format!("{}-cron-invoke", &self.id),
+                                "action": "lambda:InvokeFunction",
+                                "function_name": format!("${{aws_lambda_function.{}.function_name}}", &self.id),
+                                "principal": "events.amazonaws.com",
+                                "source_arn": format!("${{aws_cloudwatch_event_rule.{}.arn}}", &rule_key)
+                            }),
+                        );
                     }
                 }
                 LambdaTrigger::S3 { bucket, events } => {
@@ -511,7 +527,10 @@ impl Component for LambdaComponent {
                                 "lambda_function": [{
                                     "lambda_function_arn": format!("${{aws_lambda_function.{}.arn}}", &self.id),
                                     "events": events,
-                                }]
+                                }],
+                                "depends_on": [
+                                    format!("aws_lambda_permission.{}", &permission_key)
+                                ]
                             }
                         }),
                     );
@@ -815,13 +834,12 @@ fn build_lambda_artifact(
     let analyzer_path = artifact_dir.join("analyze.mjs");
     fs::write(&analyzer_path, analyzer_code)?;
 
-    let mut cmd_analyze = Command::new(bun_path);
-    cmd_analyze.args(["run", analyzer_path.to_str().unwrap()]);
-
     let output = Command::new(bun_path)
         .current_dir(&artifact_dir)
         .arg("run")
         .arg("analyze.mjs")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .output()
         .context("Failed to execute analyzer")?;
 
@@ -864,7 +882,7 @@ export const handler = lambdaFn.__handler;
     let out_file = out_dir.join("index.mjs");
 
     // TODO: sourcemaps ?
-    let status = Command::new(bun_path).args([
+    let build_output = Command::new(bun_path).args([
             "build",
             shim_path.to_str().unwrap(),
             "--outfile",
@@ -881,10 +899,14 @@ export const handler = lambdaFn.__handler;
             "--banner",
             "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
         ])
-        .envs(envs).status()?;
+        .envs(envs)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
 
-    if !status.success() {
-        bail!("Failed to build Lambda {}", id);
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr);
+        bail!("Failed to build Lambda {}:\n{}", id, stderr);
     }
 
     let zip_path = artifact_dir.join("dist").join(format!("{}.zip", &id));

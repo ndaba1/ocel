@@ -8,8 +8,8 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use base64::{engine::general_purpose, Engine};
-use serde_json::{json, Value};
+use base64::{Engine, engine::general_purpose};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -84,10 +84,11 @@ impl Component for BucketComponent {
         let bun_path = ocel.bun_bin_path.clone();
         let project_root = project.project_root.clone();
 
-        let build_result = tokio::task::spawn_blocking(move || -> Result<BucketListenerBuildOutput> {
-            build_blob_listener_artifact(&bucket_id, &env_dir, &project_root, &bun_path)
-        })
-        .await??;
+        let build_result =
+            tokio::task::spawn_blocking(move || -> Result<BucketListenerBuildOutput> {
+                build_blob_listener_artifact(&bucket_id, &env_dir, &project_root, &bun_path)
+            })
+            .await??;
 
         let mut output_lock = self.build_output.lock().unwrap();
         *output_lock = Some(build_result);
@@ -163,9 +164,7 @@ impl Component for BucketComponent {
             let project = ocel.current_project.as_ref().unwrap();
             let function_name = format!(
                 "{}-{}-{}-listener",
-                self.id,
-                project.name,
-                project.current_env_name
+                self.id, project.name, project.current_env_name
             );
             let s3_bucket = asset_bucket_ref();
             let s3_key = format!(
@@ -286,14 +285,17 @@ fn build_blob_listener_artifact(
     project_root: &PathBuf,
     bun_path: &PathBuf,
 ) -> Result<BucketListenerBuildOutput> {
-    let ocel_pkg = project_root
-        .join("node_modules")
-        .join("ocel");
+    let ocel_pkg = project_root.join("node_modules").join("ocel");
     let ocel_pkg_alt = project_root
         .parent()
         .map(|p| p.join("packages").join("ocel"));
 
-    let ocel_root = if ocel_pkg.join("src").join("blob").join("s3-listener.ts").exists() {
+    let ocel_root = if ocel_pkg
+        .join("src")
+        .join("blob")
+        .join("s3-listener.ts")
+        .exists()
+    {
         ocel_pkg
     } else if let Some(ref alt) = ocel_pkg_alt {
         if alt.join("src").join("blob").join("s3-listener.ts").exists() {
@@ -315,15 +317,19 @@ fn build_blob_listener_artifact(
     };
 
     let listener_src = ocel_root.join("src").join("blob").join("s3-listener.ts");
-    let artifact_dir = env_dir.join("artifacts").join(bucket_id).join("blob-listener");
+    let artifact_dir = env_dir
+        .join("artifacts")
+        .join(bucket_id)
+        .join("blob-listener");
 
     if artifact_dir.exists() {
         fs::remove_dir_all(&artifact_dir)?;
     }
-    fs::create_dir_all(&artifact_dir).context("Failed to create blob-listener artifact directory")?;
+    fs::create_dir_all(&artifact_dir)
+        .context("Failed to create blob-listener artifact directory")?;
 
     let out_file = artifact_dir.join("index.js");
-    let status = Command::new(bun_path)
+    let build_output = Command::new(bun_path)
         .current_dir(&ocel_root)
         .args([
             "build",
@@ -336,11 +342,14 @@ fn build_blob_listener_artifact(
             "cjs",
             "--minify",
         ])
-        .status()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
         .context("Failed to run bun build for blob listener")?;
 
-    if !status.success() {
-        bail!("Failed to build blob listener Lambda");
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr);
+        bail!("Failed to build blob listener Lambda:\n{}", stderr);
     }
 
     let zip_path = artifact_dir.parent().unwrap().join("blob-listener.zip");
@@ -357,10 +366,7 @@ impl Linkable for BucketComponent {
     fn get_env_vars(&self) -> HashMap<String, String> {
         let mut vars = HashMap::new();
         let env_key = format!("RESOURCE_{}_BUCKET_NAME", self.id);
-        vars.insert(
-            env_key,
-            format!("${{aws_s3_bucket.{}.id}}", self.id),
-        );
+        vars.insert(env_key, format!("${{aws_s3_bucket.{}.id}}", self.id));
         vars
     }
 

@@ -5,6 +5,5 @@ serve({
   fetch: app.fetch,
   port: 8001,
 }).on("listening", (p) => {
-  console.log(process.env.OCEL_PHASE);
   console.log("Hono example app is running at http://localhost:8001");
 });
