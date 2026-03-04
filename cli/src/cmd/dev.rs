@@ -9,7 +9,7 @@ use crate::lock::{self, Role};
 use crate::{follower, utils};
 use crate::{ocel::Ocel, project::OcelProject};
 use clap::Parser;
-use tracing::debug;
+use tracing::{debug, info};
 
 #[derive(Parser, Debug, Clone)]
 pub struct DevOpts {
@@ -19,6 +19,8 @@ pub struct DevOpts {
 
 pub async fn dev(options: DevOpts) -> Result<()> {
     let DevOpts { dev_cmd: cmd_rest } = options;
+
+    info!("Starting Ocel dev server...");
 
     let (tx, rx) = mpsc::channel::<CoordinatorMsg>(100);
     let (tx_broadcast, rx_broadcast) = broadcast::channel(16);
@@ -37,13 +39,14 @@ pub async fn dev(options: DevOpts) -> Result<()> {
     .await?;
 
     match role {
-        Role::Follower(info) => {
+        Role::Follower(leader_info) => {
+            info!("Ocel already running. Connecting as follower...");
             if let Some(cmd) = cmd_rest {
-                follower::run_follower(info.port, cmd).await?;
+                follower::run_follower(leader_info.port, cmd).await?;
             } else {
-                debug!(
-                    "Ocel is already running (PID {}). No command specified to wrap.",
-                    info.pid
+                info!(
+                    "Ocel is running (PID {}). Pass a command to run: ocel dev -- <cmd>",
+                    leader_info.pid
                 );
             }
         }
@@ -52,6 +55,12 @@ pub async fn dev(options: DevOpts) -> Result<()> {
             engine,
             lock_file: _,
         } => {
+            info!("Running as leader (watching for changes)");
+            info!(
+                "Watching infra in {}",
+                project.infra_sources.first().unwrap_or(&"".to_string())
+            );
+
             // watch for file changes on .tf.json file
             utils::watcher::start_watcher(
                 vec![ocel.get_tf_file_path()],

@@ -6,7 +6,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::Sender;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::{
     CoordinatorMsg,
@@ -225,25 +225,25 @@ impl OcelEngine {
         });
 
         if !skip_reconcile {
-            debug!("🔄 Changes affect infra, triggering full reconcile.");
             let ocel_ref = self.ocel.clone();
 
             if let Ok(client) = ocel_ref.get_client() {
                 if let Err(e) = client.discover(&info.addr).await {
-                    error!("❌ Discovery failed: {}", e);
-                } else {
-                    debug!("✅ Discovery complete.");
+                    error!("Discovery failed: {}", e);
                 }
             }
         }
 
-        debug!(
-            "⚡️ Running dev updates for affected components... {:?}",
-            affected_components
-                .iter()
-                .map(|c| c.id())
-                .collect::<Vec<_>>()
-        );
+        if !affected_components.is_empty() {
+            info!(
+                "Running dev updates for: {}",
+                affected_components
+                    .iter()
+                    .map(|c| c.id())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
 
         let dev_tasks: Vec<_> = affected_components
             .into_iter()

@@ -48,8 +48,8 @@ Create a minimal app with a Lambda and blob uploads. See `examples/hono` for the
 ```json
 {
   "name": "my-app",
-  "project_type": "typescript",
-  "infra_sources": ["./src/infra/**/*.ts"]
+  "language": "typescript",
+  "infraSources": ["./src/infra/**/*.ts"]
 }
 ```
 

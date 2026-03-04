@@ -25,6 +25,21 @@ impl Display for ProjectType {
     }
 }
 
+/// Expands infra directories + language to glob patterns for discovery/watching.
+pub fn expand_infra_sources(infra_dirs: &[String], project_type: ProjectType) -> Vec<String> {
+    infra_dirs
+        .iter()
+        .flat_map(|dir| {
+            let d = dir.trim_start_matches("./");
+            let glob = match project_type {
+                ProjectType::Typescript => format!("{}/**/*.ts", d),
+                ProjectType::Python => format!("{}/**/*.py", d),
+            };
+            vec![glob]
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcelProject {
     pub name: String,
@@ -40,8 +55,11 @@ pub struct OcelProject {
 #[derive(Serialize, Deserialize)]
 pub struct OcelProjectJson {
     pub name: String,
+    #[serde(rename = "language")]
     pub project_type: ProjectType,
+    #[serde(rename = "infraSources")]
     pub infra_sources: Vec<String>,
+    #[serde(default)]
     pub apps: Vec<OcelProjectApp>,
 }
 
@@ -63,7 +81,11 @@ impl From<&OcelProject> for OcelProjectJson {
         OcelProjectJson {
             name: project.name.clone(),
             project_type: project.project_type,
-            infra_sources: project.infra_sources.clone(),
+            infra_sources: if project.infra_sources.is_empty() {
+                vec!["infra/**/*.ts".to_string()]
+            } else {
+                project.infra_sources.clone()
+            },
             apps: project.apps.clone(),
         }
     }
