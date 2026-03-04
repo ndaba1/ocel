@@ -22,6 +22,7 @@
   },
   "scripts": {
     "build": "bun --cwd packages/ocel build",
-    "build:cli": "cargo build -r -p ocel --artifact-dir ./packages/native-lib/ocel-linux-x64/bin -Z unstable-options"
+    "build:cli": "cargo build -r -p ocel --artifact-dir ./packages/native-lib/ocel-linux-x64/bin -Z unstable-options",
+    "ci:version": "changeset version && bun update"
   }
 }

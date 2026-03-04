@@ -7,5 +7,9 @@
   "cpu": [
     "x64"
   ],
-  "main": "bin/ocel.exe"
+  "main": "bin/ocel.exe",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

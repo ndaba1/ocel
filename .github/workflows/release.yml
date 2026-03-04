@@ -57,7 +57,7 @@ jobs:
       - name: Create Release Pull Request
         uses: changesets/action@v1
         with:
-          version: bunx changeset version
+          version: bun run ci:version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -92,6 +92,10 @@ jobs:
       - name: Install Rust Target
         run: rustup target add ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "alpha-release-${{ matrix.target }}"
+
       - name: Build Binary
         run: cargo build --release --target ${{ matrix.target }}
 
@@ -113,11 +117,11 @@ jobs:
         with:
           bun-version: latest
           
-      # Node is still required purely to set up the .npmrc auth token for changesets
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+      - run: |
+          npm config set //registry.npmjs.org/:_authToken $NODE_AUTH_TOKEN
+          npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install Dependencies
         run: bun install --frozen-lockfile
@@ -132,23 +136,39 @@ jobs:
 
       - name: Inject Binaries into Workspace Stubs
         run: |
-          mkdir -p packages/ocel-linux-x64/bin
-          cp artifacts/bin-ocel-linux-x64/ocel packages/ocel-linux-x64/bin/
-          chmod +x packages/ocel-linux-x64/bin/ocel
+          # Linux x64
+          mkdir -p packages/native-lib/ocel-linux-x64/bin
+          cp artifacts/bin-ocel-linux-x64/ocel packages/native-lib/ocel-linux-x64/bin/
+          chmod +x packages/native-lib/ocel-linux-x64/bin/ocel
 
-          mkdir -p packages/ocel-darwin-x64/bin
-          cp artifacts/bin-ocel-darwin-x64/ocel packages/ocel-darwin-x64/bin/
-          chmod +x packages/ocel-darwin-x64/bin/ocel
+          # Darwin x64
+          mkdir -p packages/native-lib/ocel-darwin-x64/bin
+          cp artifacts/bin-ocel-darwin-x64/ocel packages/native-lib/ocel-darwin-x64/bin/
+          chmod +x packages/native-lib/ocel-darwin-x64/bin/ocel
 
-          mkdir -p packages/ocel-darwin-arm64/bin
-          cp artifacts/bin-ocel-darwin-arm64/ocel packages/ocel-darwin-arm64/bin/
-          chmod +x packages/ocel-darwin-arm64/bin/ocel
+          # Darwin arm64
+          mkdir -p packages/native-lib/ocel-darwin-arm64/bin
+          cp artifacts/bin-ocel-darwin-arm64/ocel packages/native-lib/ocel-darwin-arm64/bin/
+          chmod +x packages/native-lib/ocel-darwin-arm64/bin/ocel
 
-          mkdir -p packages/ocel-win32-x64/bin
-          cp artifacts/bin-ocel-win32-x64/ocel.exe packages/ocel-win32-x64/bin/
+          # Windows x64
+          mkdir -p packages/native-lib/ocel-win32-x64/bin
+          cp artifacts/bin-ocel-win32-x64/ocel.exe packages/native-lib/ocel-win32-x64/bin/
 
-      - name: Publish All Packages
-        run: bunx changeset publish
+      - name: Sync Lockfile for Publishing
+        run: bun update
+
+      - name: Publish All Packages via Bun
+        run: |
+          # Loop through the main package AND the native-lib directory explicitly
+          for dir in packages/ocel packages/native-lib/*; do
+            if [ -d "$dir" ] && [ -f "$dir/package.json" ]; then
+              echo "Publishing $dir..."
+              (cd "$dir" && bun publish --access public) || true
+            fi
+          done
+          
+          bunx changeset tag
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
