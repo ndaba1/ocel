@@ -14,46 +14,36 @@ jobs:
     name: Check Release Status
     runs-on: ubuntu-latest
     outputs:
-      is_release: ${{ steps.check.outputs.is_release }}
+      has_changesets: ${{ steps.check.outputs.has_changesets }}
     steps:
       - uses: actions/checkout@v4
       - name: Check for unreleased changesets
-        id: check-release
+        id: check
         run: |
-          cat << 'EOF' > check.js
-          const fs = require('fs');
-          const dir = '.changeset';
+          # 1. Count total markdown files (excluding README)
+          total_md=$(find .changeset -maxdepth 1 -name "*.md" ! -name "README.md" 2>/dev/null | wc -l || echo 0)
           
-          // If the .changeset folder doesn't exist at all, we're clear to publish
-          if (!fs.existsSync(dir)) {
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'is_release=true\n');
-            process.exit(0);
-          }
+          # 2. Count how many are already logged in pre.json
+          if [ -f .changeset/pre.json ]; then
+            consumed=$(jq '.changesets | length' .changeset/pre.json)
+          else
+            consumed=0
+          fi
           
-          // Get all markdown files
-          const mdFiles = fs.readdirSync(dir).filter(f => f.endsWith('.md') && f !== 'README.md');
+          # 3. Calculate unreleased
+          unreleased=$((total_md - consumed))
+          echo "Total MD: $total_md, Consumed: $consumed, Unreleased: $unreleased"
           
-          // Check what has been consumed in pre mode
-          let consumed = [];
-          const prePath = `${dir}/pre.json`;
-          if (fs.existsSync(prePath)) {
-            consumed = JSON.parse(fs.readFileSync(prePath, 'utf8')).changesets || [];
-          }
-          
-          // An unreleased changeset is an .md file that is NOT listed in pre.json
-          const unreleased = mdFiles.filter(f => !consumed.includes(f.replace('.md', '')));
-          
-          // If 0 unreleased changesets, it's time to trigger Phase 3 and 4!
-          const isRelease = unreleased.length === 0;
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `is_release=${isRelease}\n`);
-          EOF
-          
-          node check.js
+          if [ "$unreleased" -gt 0 ]; then
+            echo "has_changesets=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changesets=false" >> $GITHUB_OUTPUT
+          fi
 
   version-pr:
     name: Create Version PR
     needs: check-release
-    if: needs.check-release.outputs.is_release == 'false'
+    if: needs.check-release.outputs.has_changesets == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +64,7 @@ jobs:
   build-binaries:
     name: Build ${{ matrix.pkg }}
     needs: check-release
-    if: needs.check-release.outputs.is_release == 'true'
+    if: needs.check-release.outputs.has_changesets == 'false'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
